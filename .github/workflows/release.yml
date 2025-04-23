@@ -25,12 +25,12 @@ jobs:
 
       - name: sdist
         run: python -m build --sdist --outdir package
-            working-directory: ./kritamoderngl/moderngl
+          working-directory: ./kritamoderngl/moderngl
         if: matrix.os == 'ubuntu-latest'
 
       - name: wheels
         run: python -m cibuildwheel --output-dir package
-            working-directory: ./kritamoderngl/moderngl
+          working-directory: ./kritamoderngl/moderngl
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.8"
           CIBW_SKIP: pp*
