@@ -7,9 +7,6 @@ jobs:
   release:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: ./kritamoderngl/moderngl
     strategy:
       fail-fast: false
       matrix:
@@ -17,6 +14,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -26,10 +25,12 @@ jobs:
 
       - name: sdist
         run: python -m build --sdist --outdir package
+            working-directory: ./kritamoderngl/moderngl
         if: matrix.os == 'ubuntu-latest'
 
       - name: wheels
         run: python -m cibuildwheel --output-dir package
+            working-directory: ./kritamoderngl/moderngl
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.8"
           CIBW_SKIP: pp*
