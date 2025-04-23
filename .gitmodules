@@ -1,0 +1,3 @@
+[submodule "kritamoderngl/moderngl"]
+	path = kritamoderngl/moderngl
+	url = https://github.com/moderngl/moderngl.git

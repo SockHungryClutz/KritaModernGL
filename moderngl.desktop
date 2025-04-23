@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=kritamoderngl
+X-Python-2-Compatible=false
+X-Krita-Manual=krita_moderngl_plugin_manual.html
+Name=ModernGL
+Comment=Modern OpenGL Shader Programming.
