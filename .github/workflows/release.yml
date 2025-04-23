@@ -38,7 +38,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.os }}
-          path: package/*
+          path: ./kritamoderngl/moderngl/package/*
 
   merge:
     name: Merge Artifacts
