@@ -25,20 +25,33 @@ jobs:
 
       - name: sdist
         run: python -m build --sdist --outdir package
-        working-directory: ./kritamoderngl/moderngl
+        working-directory: ./moderngl
+        if: matrix.os == 'ubuntu-latest'
+
+      - name: sdist2
+        run: python -m build --sdist --outdir package
+        working-directory: ./glcontext
         if: matrix.os == 'ubuntu-latest'
 
       - name: wheels
         run: python -m cibuildwheel --output-dir package
-        working-directory: ./kritamoderngl/moderngl
+        working-directory: ./moderngl
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.8"
           CIBW_SKIP: pp*
 
+      - name: wheels2
+        run: python -m cibuildwheel --output-dir package
+        working-directory: ./glcontext
+        env:
+          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.8"
+
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.os }}
-          path: ./kritamoderngl/moderngl/package/*
+          path: |
+            ./moderngl/package/*
+            ./glcontext/package/*
 
   merge:
     name: Merge Artifacts

@@ -1,3 +1,6 @@
-[submodule "kritamoderngl/moderngl"]
-	path = kritamoderngl/moderngl
+[submodule "moderngl"]
+	path = moderngl
 	url = https://github.com/moderngl/moderngl.git
+[submodule "glcontext"]
+	path = glcontext
+	url = https://github.com/moderngl/glcontext.git
