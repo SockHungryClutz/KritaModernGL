@@ -50,6 +50,7 @@ jobs:
         working-directory: ./glcontext
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.8"
+          CIBW_SKIP: pp*
 
       - uses: actions/upload-artifact@v4
         with:
