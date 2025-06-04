@@ -8,15 +8,18 @@ import sys
 import os
 
 # Dialog box
+# TODO: Split this off into its own class/file for render shader
 class MainDialog(QDialog):
     def __init__(self, extension, parent=None):
         super(MainDialog, self).__init__(parent)
         self.ext = extension
         
         #self.helpWindow = QMessageBox()
+        # TODO: custom labelled buttons?
         self.buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Close, self)
         self.setWindowModality(Qt.WindowModal)
         self.buttonBox.accepted.connect(self.applyChanges)
+        # TODO: save window settings even when cancelled
         self.buttonBox.rejected.connect(self.reject)
         #self.buttonBox.helpRequested.connect(self.showHelp)
         
@@ -67,35 +70,48 @@ class MainDialog(QDialog):
         else:
             components = sum(1 for c in colorModel if c.isupper())
         colorDepth = node.colorDepth()
-        colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) / 8)
+        colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
         # Create input texture from current layer
-        inputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, data=curNode.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
+        inputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
         # Create output buffer with canvas size and color info
-        outputTexture = self.ext.ctx.framebuffer((doc.width(), doc.height()), components, dtype=colorDepth)
+        outputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
+        outFrameBuffer = self.ext.ctx.framebuffer([outputTexture])
         # Create a shader program from the text boxes
         program = self.ext.ctx.program(
             vertex_shader=self.vertBox.toPlainText(),
             fragment_shader=self.fragBox.toPlainText(),
         )
         # Set the texture units for the textures
-        outputTexture.use() # Through magic, framebuffers are automatically used as output(?)
+        outFrameBuffer.use() # Through magic, framebuffers are automatically used as output(?)
+        # TODO: test if selected layer is ctually being piped in properly and useable
         inputTexture.use()
+        # Hacky workaround, use the length of the first vec3 as the number of vertices
+        # If you need to render more, add a comment like "vec3 vertices[LENGTH]"
+        # TODO: Add a box where the user can put in however many vertices themselves
         vao = self.ext.ctx.vertex_array(program, [])
+        vertShader = self.vertBox.toPlainText()
+        try:
+            vertices = int(vertShader[vertShader.find("[",vertShader.find("vec3"))+1:vertShader.find("]",vertShader.find("vec3"))])
+            vao.vertices = vertices
+        except ValueError as e:
+            # Could not parse number of vertices, good luck
+            pass
         self.ext.ctx.clear()
         # Display any errors in warningWidget
         try:
             vao.render()
+            # Add new buffer to the canvas
+            curNode = node.duplicate()
+            curNode.setName("Render Result")
+            curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
+            node.parentNode().addChildNode(curNode, doc.activeNode())
+            doc.refreshProjection()
         except Exception as e:
             self.errBox.setPlainText("!ERROR!: " + str(e))
-        # Add new buffer to the canvas
-        curNode = node.duplicate()
-        curNode.setName("Render Result")
-        curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
-        node.parentNode().addChildNode(curNode, doc.activeNode())
-        doc.refreshProjection()
         # Cleanup
         inputTexture.release()
         outputTexture.release()
+        outFrameBuffer.release()
         vao.release()
         program.release()
         self.saveSettings()
@@ -126,12 +142,15 @@ class KritaModernGL(Extension):
         logging.basicConfig(filename = Krita.getAppDataLocation() + "/pykrita/kritamoderngl/log.log", level = logging.INFO)
         self.log = logging.getLogger(__name__)
         # ModernGL is compiled per platform per architecture per python version
-        # Distribute with all packages, then only unpack the relevant one
-        # TODO: Do the same thing with glcontext
-        # Determine the platform first
+        # Distribute with all packages, then only unpack the relevant ones
+        # Determine the python version
+        vers_tuple = platform.python_version_tuple()
+        vers = vers_tuple[0] + vers_tuple[1]
+        # Determine the platform
         plat = platform.system()
         if plat.lower() == "linux":
-            # Assume manylinux will work. Linux users should be smart enough to change this
+            # Assume manylinux will work
+            # Linux users should be smart enough to change this if they use a different distro
             plat = "manylinux_2_17_x86_64.manylinux2014_x86_64"
         elif plat.lower() == "windows":
             plat = "win_amd64"
@@ -140,12 +159,14 @@ class KritaModernGL(Extension):
             if platform.machine().lower() == "arm64":
                 plat = "macosx_11_0_arm64"
             else:
-                plat = "macosx_10_13_x86_64"
-        # Determine the python version
-        vers_tuple = platform.python_version_tuple()
-        vers = vers_tuple[0] + vers_tuple[1]
+                # Different platform is named depending on python version
+                if int(vers_tuple[1]) >= 12:
+                    plat = "macosx_10_13_x86_64"
+                else:
+                    plat = "macosx_10_9_x86_64"
         # Construct the expected file name
         mgl_name = "moderngl-5.12.0-cp" + vers + "-cp" + vers + "-" + plat
+        glc_name = "glcontext-3.0.0-cp" + vers + "-cp" + vers + "-" + plat
         # If it is not a directory, extract the zip to a directory
         mgl_path = Krita.getAppDataLocation() + "/pykrita/kritamoderngl/bin/"
         if not os.path.exists(os.path.join(mgl_path, mgl_name)):
@@ -156,8 +177,18 @@ class KritaModernGL(Extension):
             except:
                 # This platform has no valid ModernGL build
                 self.log.warning("No valid ModernGL build found, attempted: %s", mgl_name)
+        # Repeat for glcontext
+        if not os.path.exists(os.path.join(mgl_path, glc_name)):
+            os.makedirs(os.path.join(mgl_path, glc_name))
+            try:
+                with ZipFile(os.path.join(mgl_path, glc_name) + ".whl", "r") as glc_zip:
+                    glc_zip.extractall(os.path.join(mgl_path, glc_name))
+            except:
+                # This platform has no valid GLContext build
+                self.log.warning("No valid GLContext build found, attempted: %s", glc_name)
         # Add the directory to the path
         sys.path.append(os.path.join(mgl_path, mgl_name))
+        sys.path.append(os.path.join(mgl_path, glc_name))
         # Import the correct version of ModernGL
         try:
             import moderngl
@@ -176,15 +207,15 @@ class KritaModernGL(Extension):
         # Figure out how to hook into moderngl library
         # Then give the user string to the library to work magic
         # Stretch goals:
-        #   * Add scrollable box for error output
-        #   * Add support for vertex instead of pixel shaders
+        #   * Make the input boxes monospace
         #   * Add help for possible inputs
         configPath = QStandardPaths.writableLocation(QStandardPaths.GenericConfigLocation)
         self.settings = QSettings(configPath + '/krita-scripterrc', QSettings.IniFormat)
         self.mainDialog = MainDialog(self)
 
     def createActions(self, window):
-        mainAction = window.createAction("KritaModernGL", "OpenGL Shader Programming")
+        mainAction = window.createAction("KritaModernGL", "OpenGL Render Shader Programming")
         mainAction.triggered.connect(self.ModernGLWindow)
+        # TODO: Make a second action, window, and class for Compute Shader Programming
 
 Krita.instance().addExtension(KritaModernGL(Krita.instance()))
