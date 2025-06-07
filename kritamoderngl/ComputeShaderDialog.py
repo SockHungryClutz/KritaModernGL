@@ -3,10 +3,10 @@ from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths
 from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
 
-# Dialog box for render shader
-class RenderShaderDialog(QDialog):
+# Dialog box for compute shader
+class ComputeShaderDialog(QDialog):
     def __init__(self, extension, parent=None):
-        super(RenderShaderDialog, self).__init__(parent)
+        super(ComputeShaderDialog, self).__init__(parent)
         self.ext = extension
         
         self.helpWindow = QMessageBox()
@@ -21,23 +21,27 @@ class RenderShaderDialog(QDialog):
         monoFont = QFont("Monospace")
         monoFont.setStyleHint(QFont.TypeWriter)
         
-        self.vertLayout = QHBoxLayout()
-        self.vertLabel = QLabel("Vertex Shader:", self)
-        self.vertLabel2 = QLabel("Number of vertices to render:", self)
-        self.vertNumber = QLineEdit("-1", self)
-        self.vertNumber.setValidator(QIntValidator(-1, 2147483647, self))
-        self.vertLayout.addWidget(self.vertLabel2)
-        self.vertLayout.addWidget(self.vertNumber)
-        self.vertBox = QTextEdit()
-        self.vertBox.setAcceptRichText(False)
-        self.vertBox.setTabChangesFocus(False)
-        self.vertBox.setFont(monoFont)
-        
-        self.fragLabel = QLabel("Fragment Shader:", self)
-        self.fragBox = QTextEdit()
-        self.fragBox.setAcceptRichText(False)
-        self.fragBox.setTabChangesFocus(False)
-        self.fragBox.setFont(monoFont)
+        self.compLabel = QLabel("Compute Shader:", self)
+        self.compLayout = QHBoxLayout()
+        self.compLabelX = QLabel("Workgroup X:", self)
+        self.compWGX = QLineEdit("1", self)
+        self.compWGX.setValidator(QIntValidator(1, 2147483647, self))
+        self.compLabelY = QLabel("Workgroup Y:", self)
+        self.compWGY = QLineEdit("1", self)
+        self.compWGY.setValidator(QIntValidator(1, 2147483647, self))
+        self.compLabelZ = QLabel("Workgroup Z:", self)
+        self.compWGZ = QLineEdit("1", self)
+        self.compWGZ.setValidator(QIntValidator(1, 2147483647, self))
+        self.compLayout.addWidget(self.compLabelX)
+        self.compLayout.addWidget(self.compWGX)
+        self.compLayout.addWidget(self.compLabelY)
+        self.compLayout.addWidget(self.compWGY)
+        self.compLayout.addWidget(self.compLabelZ)
+        self.compLayout.addWidget(self.compWGZ)
+        self.compBox = QTextEdit()
+        self.compBox.setAcceptRichText(False)
+        self.compBox.setTabChangesFocus(False)
+        self.compBox.setFont(monoFont)
         
         self.errLabel = QLabel("Errors:", self)
         self.errBox = QTextEdit()
@@ -46,11 +50,9 @@ class RenderShaderDialog(QDialog):
         self.errBox.setPlaceholderText("Enter shader code above and click Run, warnings and errors will appear here.")
         
         vbox = QVBoxLayout(self)
-        vbox.addWidget(self.vertLabel)
-        vbox.addLayout(self.vertLayout)
-        vbox.addWidget(self.vertBox)
-        vbox.addWidget(self.fragLabel)
-        vbox.addWidget(self.fragBox)
+        vbox.addWidget(self.compLabel)
+        vbox.addLayout(self.compLayout)
+        vbox.addWidget(self.compBox)
         vbox.addWidget(self.errLabel)
         vbox.addWidget(self.errBox)
         vbox.addWidget(self.buttonBox)
@@ -82,39 +84,33 @@ class RenderShaderDialog(QDialog):
         inputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
         # Create output buffer with canvas size and color info
         outputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
-        outFrameBuffer = self.ext.ctx.framebuffer([outputTexture])
         # Create a shader program from the text boxes
         try:
-            program = self.ext.ctx.program(
-                vertex_shader=self.vertBox.toPlainText(),
-                fragment_shader=self.fragBox.toPlainText(),
-            )
+            shader = self.ext.ctx.compute_shader(self.compBox.toPlainText())
         except Exception as e:
             self.errBox.setPlainText(str(e))
             # Cleanup and early exit
             inputTexture.release()
             outputTexture.release()
-            outFrameBuffer.release()
             self.saveSettings()
             return
         # Set the texture units for the textures
-        outFrameBuffer.use() # Through magic, framebuffers are automatically used as output
-        inputTexture.use() # And textures can be used as input with a sampler2D
-        vao = self.ext.ctx.vertex_array(program, [])
+        outputTexture.bind_to_image(0, read=True, write=True)
+        inputTexture.bind_to_image(1, read=True, write=False)
         try:
-            vertices = int(self.vertNumber.text())
-            vao.vertices = vertices
+            workgroupX = int(self.compWGX.text())
+            workgroupY = int(self.compWGY.text())
+            workgroupZ = int(self.compWGZ.text())
         except ValueError as e:
-            # Could not parse number of vertices, good luck
-            pass
+            self.errBox.setPlainText("Failed to parse workgroup dimensions:\n" + str(e))
         
         self.ext.ctx.clear()
         # Display any errors in warningWidget
         try:
-            vao.render()
+            shader.run(workgroupX, workgroupY, workgroupZ)
             # Add new buffer to the canvas
             curNode = node.duplicate()
-            curNode.setName("Render Result")
+            curNode.setName("Compute Result")
             curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
             node.parentNode().addChildNode(curNode, doc.activeNode())
             doc.refreshProjection()
@@ -123,21 +119,16 @@ class RenderShaderDialog(QDialog):
         # Cleanup
         inputTexture.release()
         outputTexture.release()
-        outFrameBuffer.release()
-        vao.release()
-        program.release()
+        shader.release()
         self.saveSettings()
 
     def showHelp(self):
-        self.helpWindow.setText("Krita ModernGL Render Shader Programming")
-        self.helpWindow.setInformativeText("""This tool is designed for running GLSL vertex and fragment shaders inside of Krita and rendering their output to a new layer in the current document. If you would like to learn more, https://learnopengl.com has good tutorials. Here are some more useful bits of info:
+        self.helpWindow.setText("Krita ModernGL Compute Shader Programming")
+        self.helpWindow.setInformativeText("""This tool is designed for running GLSL compute shaders inside of Krita and rendering their output to a new layer in the current document. If you would like to learn more, https://www.khronos.org/opengl/wiki/Compute_Shader has essential resources. Here are some more useful bits of info:
 
-   > No vertices are fed into the vertex shader from the program, you will need to define your own vertices inside the shader to render.
-   > Use the text box above the vertex shader to specify how many vertices are to be processed.
-   > The render primitive mode is triangles since this is the default.
-   > Varyings output from the vertex shader can be used as inputs to the fragment shader.
-   > The output of the fragment shader will be rendered to a new layer added above the current selected layer.
-   > The current selected layer can be used as a texture input with uniform sampler2D.
+   > The output texture is bound to texture unit 0.
+   > The input texture is taken from the current selected layer and is bound to texture unit 1.
+   > The output will be rendered to a new layer added above the current selected layer.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.""")
         self.helpWindow.exec()
 
@@ -152,16 +143,17 @@ class RenderShaderDialog(QDialog):
     def saveSettings(self):
         rect = self.geometry()
         self.ext.settings.setValue("mgl_geometry", rect)
-        self.ext.settings.setValue("mgl_vert_number", self.vertNumber.text())
-        if self.vertBox.toPlainText() != "":
-            self.ext.settings.setValue("mgl_vert_shader", self.vertBox.toPlainText())
-        if self.fragBox.toPlainText() != "":
-            self.ext.settings.setValue("mgl_frag_shader", self.fragBox.toPlainText())
+        self.ext.settings.setValue("mgl_comp_wgx", self.compWGX.text())
+        self.ext.settings.setValue("mgl_comp_wgy", self.compWGY.text())
+        self.ext.settings.setValue("mgl_comp_wgz", self.compWGZ.text())
+        if self.compBox.toPlainText() != "":
+            self.ext.settings.setValue("mgl_comp_shader", self.compBox.toPlainText())
         self.ext.settings.sync()
 
     def readSettings(self):
         rect = self.ext.settings.value("mgl_geometry", QRect(200, 200, 800, 800))
         self.setGeometry(rect)
-        self.vertNumber.setText(self.ext.settings.value("mgl_vert_number", "-1"))
-        self.vertBox.setPlainText(self.ext.settings.value("mgl_vert_shader", ""))
-        self.fragBox.setPlainText(self.ext.settings.value("mgl_frag_shader", ""))
+        self.compWGX.setText(self.ext.settings.value("mgl_comp_wgx", "1"))
+        self.compWGY.setText(self.ext.settings.value("mgl_comp_wgy", "1"))
+        self.compWGZ.setText(self.ext.settings.value("mgl_comp_wgz", "1"))
+        self.compBox.setPlainText(self.ext.settings.value("mgl_comp_shader", ""))

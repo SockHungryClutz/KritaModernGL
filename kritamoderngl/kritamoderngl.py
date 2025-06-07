@@ -1,6 +1,6 @@
 from krita import *
 from zipfile import ZipFile
-from . import RenderShaderDialog
+from . import RenderShaderDialog, ComputeShaderDialog
 import logging
 import platform
 import sys
@@ -72,14 +72,20 @@ class KritaModernGL(Extension):
     def setup(self):
         pass
 
-    def ModernGLWindow(self):
+    def RenderShaderAction(self):
         configPath = QStandardPaths.writableLocation(QStandardPaths.GenericConfigLocation)
         self.settings = QSettings(configPath + '/krita-scripterrc', QSettings.IniFormat)
         self.mainDialog = RenderShaderDialog.RenderShaderDialog(self)
 
+    def ComputeShaderAction(self):
+        configPath = QStandardPaths.writableLocation(QStandardPaths.GenericConfigLocation)
+        self.settings = QSettings(configPath + '/krita-scripterrc', QSettings.IniFormat)
+        self.mainDialog = ComputeShaderDialog.ComputeShaderDialog(self)
+
     def createActions(self, window):
-        mainAction = window.createAction("KritaModernGL", "OpenGL Render Shader Programming")
-        mainAction.triggered.connect(self.ModernGLWindow)
-        # TODO: Make a second action, window, and class for Compute Shader Programming
+        mainAction = window.createAction("KritaModernGL_Render", "OpenGL Render Shader Programming")
+        mainAction.triggered.connect(self.RenderShaderAction)
+        mainAction = window.createAction("KritaModernGL_Compute", "OpenGL Compute Shader Programming")
+        mainAction.triggered.connect(self.ComputeShaderAction)
 
 Krita.instance().addExtension(KritaModernGL(Krita.instance()))
