@@ -25,7 +25,7 @@ Use the **Help** button to see a more descriptive explination of each option.
 
 ## Examples
 
-Vertex shader that covers the whole image
+Vertex shader that covers the whole image, the number of vertices to render should be set to 6 to render all vertices in the array
 ```
 #version 330 core
 
@@ -60,7 +60,7 @@ void main() {
 }
 ```
 
-Compute shader that swaps the color channels
+Compute shader that swaps the color channels, set the Workgroup X variable to 1/16 the X axis size and Workgroup Y to 1/16 the Y axis size, eg. 64 for both would cover a 1024x1024 area
 ```
 #version 450
 
@@ -73,7 +73,7 @@ void main() {
     ivec2 tex_pos = ivec2(gl_GlobalInvocationID.xy);
     uvec4 color = imageLoad(in_texture, tex_pos);
     uvec4 flipped_color = color.gbra;
-    imageStore(out_texture, texel_pos, flipped_color);
+    imageStore(out_texture, tex_pos, flipped_color);
 }
 ```
 
