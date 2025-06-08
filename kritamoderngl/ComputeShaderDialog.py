@@ -69,9 +69,9 @@ class ComputeShaderDialog(QDialog):
         if not doc:
             self.errBox.setPlainText("You need to have a document open to use this script!")
             return
+        newNode = None
         # Get information for the buffer format
         # Number of components is the number of capitals in the color model, unless GRAYA
-        doc = Krita.instance().activeDocument()
         node = doc.activeNode()
         colorModel = node.colorModel()
         if colorModel == "GRAYA":
@@ -110,18 +110,20 @@ class ComputeShaderDialog(QDialog):
             # Display any errors in warningWidget
             try:
                 shader.run(workgroupX, workgroupY, workgroupZ)
-                # Add new buffer to the canvas
-                curNode = node.duplicate()
-                curNode.setName("Compute Result")
-                curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
-                node.parentNode().addChildNode(curNode, doc.activeNode())
-                doc.refreshProjection()
+                ctx.finish()
+                # Put the result into a new node
+                newNode = doc.createNode("Render Result", "paintlayer")
+                newNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
             except Exception as e:
                 self.errBox.setPlainText(str(e))
             # Cleanup
             inputTexture.release()
             outputTexture.release()
             shader.release()
+        if newNode:
+            # Exit the context scope before adding a new node
+            node.parentNode().addChildNode(newNode, node)
+            doc.refreshProjection()
         self.saveSettings()
 
     def showHelp(self):

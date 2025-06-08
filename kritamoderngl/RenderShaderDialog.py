@@ -67,9 +67,9 @@ class RenderShaderDialog(QDialog):
         if not doc:
             self.errBox.setPlainText("You need to have a document open to use this script!")
             return
+        newNode = None
         # Get information for the buffer format
         # Number of components is the number of capitals in the color model, unless GRAYA
-        doc = Krita.instance().activeDocument()
         node = doc.activeNode()
         colorModel = node.colorModel()
         if colorModel == "GRAYA":
@@ -80,12 +80,12 @@ class RenderShaderDialog(QDialog):
         colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
         # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
         with self.ext.ctx as ctx:
-            # Create input texture from current layer
+            ## Create input texture from current layer
             inputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
-            # Create output buffer with canvas size and color info
+            ## Create output buffer with canvas size and color info
             outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
             outFrameBuffer = ctx.framebuffer([outputTexture])
-            # Create a shader program from the text boxes
+            ## Create a shader program from the text boxes
             try:
                 program = ctx.program(
                     vertex_shader=self.vertBox.toPlainText(),
@@ -104,7 +104,8 @@ class RenderShaderDialog(QDialog):
             vao = ctx.vertex_array(program, [])
             try:
                 vertices = int(self.vertNumber.text())
-                vao.vertices = vertices
+                if vertices != -1:
+                    vao.vertices = vertices
             except ValueError as e:
                 # Could not parse number of vertices, good luck
                 pass
@@ -113,12 +114,10 @@ class RenderShaderDialog(QDialog):
             # Display any errors in warningWidget
             try:
                 vao.render()
-                # Add new buffer to the canvas
-                curNode = node.duplicate()
-                curNode.setName("Render Result")
-                curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
-                node.parentNode().addChildNode(curNode, doc.activeNode())
-                doc.refreshProjection()
+                ctx.finish()
+                # Put the result into a new node
+                newNode = doc.createNode("Render Result", "paintlayer")
+                newNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
             except Exception as e:
                 self.errBox.setPlainText(str(e))
             # Cleanup
@@ -127,6 +126,10 @@ class RenderShaderDialog(QDialog):
             outFrameBuffer.release()
             vao.release()
             program.release()
+        if newNode:
+            # Exit the context scope before adding a new node
+            node.parentNode().addChildNode(newNode, node)
+            doc.refreshProjection()
         self.saveSettings()
 
     def showHelp(self):

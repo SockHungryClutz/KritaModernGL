@@ -19,10 +19,13 @@ class KritaModernGL(Extension):
         vers = vers_tuple[0] + vers_tuple[1]
         # Determine the platform
         plat = platform.system()
+        glc_plat = ""
         if plat.lower() == "linux":
             # Assume manylinux will work
             # Linux users should be smart enough to change this if they use a different distro
             plat = "manylinux_2_17_x86_64.manylinux2014_x86_64"
+            # Linux binaries cannot have consistent names
+            glc_plat = "manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64"
         elif plat.lower() == "windows":
             plat = "win_amd64"
         elif plat.lower() == "darwin":
@@ -37,7 +40,10 @@ class KritaModernGL(Extension):
                     plat = "macosx_10_9_x86_64"
         # Construct the expected file name
         mgl_name = "moderngl-5.12.0-cp" + vers + "-cp" + vers + "-" + plat
-        glc_name = "glcontext-3.0.0-cp" + vers + "-cp" + vers + "-" + plat
+        if glc_plat:
+            glc_name = "glcontext-3.0.0-cp" + vers + "-cp" + vers + "-" + glc_plat
+        else:
+            glc_name = "glcontext-3.0.0-cp" + vers + "-cp" + vers + "-" + plat
         # If it is not a directory, extract the zip to a directory
         mgl_path = Krita.getAppDataLocation() + "/pykrita/kritamoderngl/bin/"
         if not os.path.exists(os.path.join(mgl_path, mgl_name)):
