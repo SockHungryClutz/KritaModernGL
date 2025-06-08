@@ -80,46 +80,48 @@ class ComputeShaderDialog(QDialog):
             components = sum(1 for c in colorModel if c.isupper())
         colorDepth = node.colorDepth()
         colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
-        # Create input texture from current layer
-        inputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
-        # Create output buffer with canvas size and color info
-        outputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
-        # Create a shader program from the text boxes
-        try:
-            shader = self.ext.ctx.compute_shader(self.compBox.toPlainText())
-        except Exception as e:
-            self.errBox.setPlainText(str(e))
-            # Cleanup and early exit
+        # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
+        with self.ext.ctx as ctx:
+            # Create input texture from current layer
+            inputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
+            # Create output buffer with canvas size and color info
+            outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
+            # Create a shader program from the text boxes
+            try:
+                shader = ctx.compute_shader(self.compBox.toPlainText())
+            except Exception as e:
+                self.errBox.setPlainText(str(e))
+                # Cleanup and early exit
+                inputTexture.release()
+                outputTexture.release()
+                self.saveSettings()
+                return
+            # Set the texture units for the textures
+            outputTexture.bind_to_image(0, read=True, write=True)
+            inputTexture.bind_to_image(1, read=True, write=False)
+            try:
+                workgroupX = int(self.compWGX.text())
+                workgroupY = int(self.compWGY.text())
+                workgroupZ = int(self.compWGZ.text())
+            except ValueError as e:
+                self.errBox.setPlainText("Failed to parse workgroup dimensions:\n" + str(e))
+            
+            ctx.clear()
+            # Display any errors in warningWidget
+            try:
+                shader.run(workgroupX, workgroupY, workgroupZ)
+                # Add new buffer to the canvas
+                curNode = node.duplicate()
+                curNode.setName("Compute Result")
+                curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
+                node.parentNode().addChildNode(curNode, doc.activeNode())
+                doc.refreshProjection()
+            except Exception as e:
+                self.errBox.setPlainText(str(e))
+            # Cleanup
             inputTexture.release()
             outputTexture.release()
-            self.saveSettings()
-            return
-        # Set the texture units for the textures
-        outputTexture.bind_to_image(0, read=True, write=True)
-        inputTexture.bind_to_image(1, read=True, write=False)
-        try:
-            workgroupX = int(self.compWGX.text())
-            workgroupY = int(self.compWGY.text())
-            workgroupZ = int(self.compWGZ.text())
-        except ValueError as e:
-            self.errBox.setPlainText("Failed to parse workgroup dimensions:\n" + str(e))
-        
-        self.ext.ctx.clear()
-        # Display any errors in warningWidget
-        try:
-            shader.run(workgroupX, workgroupY, workgroupZ)
-            # Add new buffer to the canvas
-            curNode = node.duplicate()
-            curNode.setName("Compute Result")
-            curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
-            node.parentNode().addChildNode(curNode, doc.activeNode())
-            doc.refreshProjection()
-        except Exception as e:
-            self.errBox.setPlainText(str(e))
-        # Cleanup
-        inputTexture.release()
-        outputTexture.release()
-        shader.release()
+            shader.release()
         self.saveSettings()
 
     def showHelp(self):

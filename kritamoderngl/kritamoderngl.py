@@ -65,7 +65,7 @@ class KritaModernGL(Extension):
             import moderngl
             # Initialize ModernGL here to have a persistant context
             self.ctx = moderngl.create_context(standalone=True)
-            self.log.info("ModernGL initialized, GL_VENDOR: %s, GL_RENDERER: %s, GL_VERSION: $s", self.ctx.info["GL_VENDOR"], self.ctx.info["GL_RENDERER"], self.ctx.info["GL_VERSION"])
+            self.log.info("ModernGL initialized, GL_VENDOR: %s, GL_RENDERER: %s, GL_VERSION: %s", self.ctx.info["GL_VENDOR"], self.ctx.info["GL_RENDERER"], self.ctx.info["GL_VERSION"])
         except ImportError as e:
             self.log.warning("Failed to import ModernGL: %s", str(e))
 

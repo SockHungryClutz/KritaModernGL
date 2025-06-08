@@ -78,54 +78,55 @@ class RenderShaderDialog(QDialog):
             components = sum(1 for c in colorModel if c.isupper())
         colorDepth = node.colorDepth()
         colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
-        # Create input texture from current layer
-        inputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
-        # Create output buffer with canvas size and color info
-        outputTexture = self.ext.ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
-        outFrameBuffer = self.ext.ctx.framebuffer([outputTexture])
-        # Create a shader program from the text boxes
-        try:
-            program = self.ext.ctx.program(
-                vertex_shader=self.vertBox.toPlainText(),
-                fragment_shader=self.fragBox.toPlainText(),
-            )
-        except Exception as e:
-            self.errBox.setPlainText(str(e))
-            # Cleanup and early exit
+        # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
+        with self.ext.ctx as ctx:
+            # Create input texture from current layer
+            inputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
+            # Create output buffer with canvas size and color info
+            outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
+            outFrameBuffer = ctx.framebuffer([outputTexture])
+            # Create a shader program from the text boxes
+            try:
+                program = ctx.program(
+                    vertex_shader=self.vertBox.toPlainText(),
+                    fragment_shader=self.fragBox.toPlainText())
+            except Exception as e:
+                self.errBox.setPlainText(str(e))
+                # Cleanup and early exit
+                inputTexture.release()
+                outputTexture.release()
+                outFrameBuffer.release()
+                self.saveSettings()
+                return
+            # Set the texture units for the textures
+            outFrameBuffer.use() # Through magic, framebuffers are automatically used as output
+            inputTexture.use() # And textures can be used as input with a sampler2D
+            vao = ctx.vertex_array(program, [])
+            try:
+                vertices = int(self.vertNumber.text())
+                vao.vertices = vertices
+            except ValueError as e:
+                # Could not parse number of vertices, good luck
+                pass
+            
+            ctx.clear()
+            # Display any errors in warningWidget
+            try:
+                vao.render()
+                # Add new buffer to the canvas
+                curNode = node.duplicate()
+                curNode.setName("Render Result")
+                curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
+                node.parentNode().addChildNode(curNode, doc.activeNode())
+                doc.refreshProjection()
+            except Exception as e:
+                self.errBox.setPlainText(str(e))
+            # Cleanup
             inputTexture.release()
             outputTexture.release()
             outFrameBuffer.release()
-            self.saveSettings()
-            return
-        # Set the texture units for the textures
-        outFrameBuffer.use() # Through magic, framebuffers are automatically used as output
-        inputTexture.use() # And textures can be used as input with a sampler2D
-        vao = self.ext.ctx.vertex_array(program, [])
-        try:
-            vertices = int(self.vertNumber.text())
-            vao.vertices = vertices
-        except ValueError as e:
-            # Could not parse number of vertices, good luck
-            pass
-        
-        self.ext.ctx.clear()
-        # Display any errors in warningWidget
-        try:
-            vao.render()
-            # Add new buffer to the canvas
-            curNode = node.duplicate()
-            curNode.setName("Render Result")
-            curNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
-            node.parentNode().addChildNode(curNode, doc.activeNode())
-            doc.refreshProjection()
-        except Exception as e:
-            self.errBox.setPlainText(str(e))
-        # Cleanup
-        inputTexture.release()
-        outputTexture.release()
-        outFrameBuffer.release()
-        vao.release()
-        program.release()
+            vao.release()
+            program.release()
         self.saveSettings()
 
     def showHelp(self):
