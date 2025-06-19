@@ -1,7 +1,8 @@
 from krita import *
 from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths
 from PyQt5.QtGui import QIntValidator, QFont
-from PyQt5.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
+from PyQt5.QtWidgets import QDialog, QFileDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
+import logging
 
 # Dialog box for render shader
 class RenderShaderDialog(QDialog):
@@ -10,14 +11,20 @@ class RenderShaderDialog(QDialog):
         self.ext = extension
         
         self.helpWindow = QMessageBox()
-        self.buttonBox = QDialogButtonBox(self)
-        self.buttonBox.addButton("Run", QDialogButtonBox.AcceptRole)
-        self.buttonBox.addButton("Help", QDialogButtonBox.HelpRole)
-        self.buttonBox.addButton("Close", QDialogButtonBox.RejectRole)
-        self.setWindowModality(Qt.WindowModal)
-        self.buttonBox.accepted.connect(self.applyChanges)
+        self.buttonBox = QDialogButtonBox(
+            QDialogButtonBox.Open |
+            QDialogButtonBox.Save |
+            QDialogButtonBox.Ok |
+            QDialogButtonBox.Help |
+            QDialogButtonBox.Cancel,
+            self)
+        self.buttonBox.button(QDialogButtonBox.Ok).setText("Run")
+        self.buttonBox.button(QDialogButtonBox.Ok).clicked.connect(self.applyChanges)
+        self.buttonBox.button(QDialogButtonBox.Open).clicked.connect(self.openFile)
+        self.buttonBox.button(QDialogButtonBox.Save).clicked.connect(self.saveFile)
         self.buttonBox.helpRequested.connect(self.showHelp)
         self.buttonBox.rejected.connect(self.saveAndReject)
+        self.setWindowModality(Qt.WindowModal)
         monoFont = QFont("Monospace")
         monoFont.setStyleHint(QFont.TypeWriter)
         
@@ -152,6 +159,72 @@ class RenderShaderDialog(QDialog):
    > The current selected layer can be used as a texture input with uniform sampler2D.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.""")
         self.helpWindow.exec()
+
+    def openFile(self):
+        # Open a file selection dialog
+        files = QFileDialog.getOpenFileNames(
+            self,
+            "Select one or more files to open",
+            Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
+            "Shaders (*.vert *.frag)")
+        vertexFile = None
+        fragmentFile = None
+        multipleVert = False
+        multipleFrag = False
+        # Iterate over all selected files
+        for file in files[0]:
+            ext =  file.rsplit(".", 1)[1]
+            # Take the first .vert and .frag files listed
+            if ext.lower() == "vert":
+                if vertexFile:
+                    multipleVert = True
+                else:
+                    vertexFile = file
+            elif ext.lower() == "frag":
+                if fragmentFile:
+                    multipleFrag = True
+                else:
+                    fragmentFile = file
+        # If multiple files of a specific type are selected, add a warning to the user
+        warning = ""
+        if multipleVert:
+            warning += "Multiple vertex shader files selected, only one will be loaded: "
+            warning += vertexFile
+            warning += "\n"
+        if multipleFrag:
+            warning += "Multiple fragment shader files selected, only one will be loaded: "
+            warning += fragmentFile
+            warning += "\n"
+        if not vertexFile and not fragmentFile:
+            warning += "No files with the expected extensions (*.frag *.vert) selected"
+        # Load the selected shaders into the text boxes
+        if vertexFile:
+            with open(vertexFile, 'r') as vf:
+                self.vertBox.setPlainText(vf.read())
+        if fragmentFile:
+            with open(fragmentFile, 'r') as ff:
+                self.fragBox.setPlainText(ff.read())
+        # Display the warning if any
+        if warning:
+            self.errBox.setPlainText(warning)
+
+    def saveFile(self):
+        # Open a file save dialog
+        file = QFileDialog.getSaveFileName(
+            self,
+            "Save File",
+            Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
+            "Shaders (*.vert *.frag)")
+        # Get the extension of the file to save
+        ext =  file[0].rsplit(".", 1)[1]
+        # If it ends in .vert or .frag, use the beginning as the file name for both
+        if ext.lower() == "vert" or ext.lower() == "frag":
+            file = file[0].rsplit(".", 1)[0]
+        # Write the contents of the text boxes to files
+        with open(file + ".vert", 'w') as vf:
+            vf.write(self.vertBox.toPlainText())
+        with open(file + ".frag", 'w') as ff:
+            ff.write(self.fragBox.toPlainText())
 
     def saveAndReject(self):
         self.saveSettings()

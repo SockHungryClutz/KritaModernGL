@@ -10,12 +10,18 @@ class ComputeShaderDialog(QDialog):
         self.ext = extension
         
         self.helpWindow = QMessageBox()
-        self.buttonBox = QDialogButtonBox(self)
-        self.buttonBox.addButton("Run", QDialogButtonBox.AcceptRole)
-        self.buttonBox.addButton("Help", QDialogButtonBox.HelpRole)
-        self.buttonBox.addButton("Close", QDialogButtonBox.RejectRole)
+        self.buttonBox = QDialogButtonBox(
+            QDialogButtonBox.Open |
+            QDialogButtonBox.Save |
+            QDialogButtonBox.Ok |
+            QDialogButtonBox.Help |
+            QDialogButtonBox.Cancel,
+            self)
+        self.buttonBox.button(QDialogButtonBox.Ok).setText("Run")
+        self.buttonBox.button(QDialogButtonBox.Ok).clicked.connect(self.applyChanges)
+        self.buttonBox.button(QDialogButtonBox.Open).clicked.connect(self.openFile)
+        self.buttonBox.button(QDialogButtonBox.Save).clicked.connect(self.saveFile)
         self.setWindowModality(Qt.WindowModal)
-        self.buttonBox.accepted.connect(self.applyChanges)
         self.buttonBox.helpRequested.connect(self.showHelp)
         self.buttonBox.rejected.connect(self.saveAndReject)
         monoFont = QFont("Monospace")
@@ -143,6 +149,28 @@ class ComputeShaderDialog(QDialog):
    > The output will be rendered to a new layer added above the current selected layer.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.""")
         self.helpWindow.exec()
+
+    def openFile(self):
+        # Open a file selection dialog
+        file = QFileDialog.getOpenFileName(
+            self,
+            "Select a file to open",
+            Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
+            "Compute Shaders (*.comp)")
+        with open(file[0], 'r') as cf:
+            self.compBox.setPlainText(cf.read())
+
+    def saveFile(self):
+        # Open a file save dialog
+        file = QFileDialog.getSaveFileName(
+            self,
+            "Save File",
+            Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
+            "Compute Shaders (*.comp)")
+        file = file[0]
+        # Write the contents of the text box to file
+        with open(file, 'w') as cf:
+            cf.write(self.compBox.toPlainText())
 
     def saveAndReject(self):
         self.saveSettings()
