@@ -167,9 +167,8 @@ class ComputeShaderDialog(QDialog):
             "Save File",
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Compute Shaders (*.comp)")
-        file = file[0]
         # Write the contents of the text box to file
-        with open(file, 'w') as cf:
+        with open(file[0], 'w') as cf:
             cf.write(self.compBox.toPlainText())
 
     def saveAndReject(self):
