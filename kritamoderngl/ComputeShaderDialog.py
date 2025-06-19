@@ -63,6 +63,14 @@ class ComputeShaderDialog(QDialog):
         self.setSizeGripEnabled(True)
         self.show()
         self.activateWindow()
+        
+        # For some reason, the geometry as applied differs from how it should be
+        # Save the difference and apply it on save
+        self.geometryDelta = QRect(
+            self.geometry().x() - self.readGeometry.x(),
+            self.geometry().y() - self.readGeometry.y(),
+            self.geometry().width() - self.readGeometry.width(),
+            self.geometry().height() - self.readGeometry.height())
 
     def applyChanges(self):
         doc = Krita.instance().activeDocument()
@@ -145,7 +153,11 @@ class ComputeShaderDialog(QDialog):
         event.accept()
 
     def saveSettings(self):
-        rect = self.geometry()
+        rect = QRect(
+            self.geometry().x() - self.geometryDelta.x(),
+            self.geometry().y() - self.geometryDelta.y(),
+            self.geometry().width() - self.geometryDelta.width(),
+            self.geometry().height() - self.geometryDelta.height())
         self.ext.settings.setValue("mgl_geometry", rect)
         self.ext.settings.setValue("mgl_comp_wgx", self.compWGX.text())
         self.ext.settings.setValue("mgl_comp_wgy", self.compWGY.text())
@@ -155,8 +167,8 @@ class ComputeShaderDialog(QDialog):
         self.ext.settings.sync()
 
     def readSettings(self):
-        rect = self.ext.settings.value("mgl_geometry", QRect(200, 200, 800, 800))
-        self.setGeometry(rect)
+        self.readGeometry = self.ext.settings.value("mgl_geometry", QRect(200, 200, 800, 800))
+        self.setGeometry(self.readGeometry)
         self.compWGX.setText(self.ext.settings.value("mgl_comp_wgx", "1"))
         self.compWGY.setText(self.ext.settings.value("mgl_comp_wgy", "1"))
         self.compWGZ.setText(self.ext.settings.value("mgl_comp_wgz", "1"))
