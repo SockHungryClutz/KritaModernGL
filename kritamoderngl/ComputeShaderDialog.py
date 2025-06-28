@@ -147,7 +147,8 @@ class ComputeShaderDialog(QDialog):
    > The output texture is bound to texture unit 0.
    > The input texture is taken from the current selected layer and is bound to texture unit 1.
    > The output will be rendered to a new layer added above the current selected layer.
-   > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.""")
+   > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.
+   > Shader files can be saved and loaded using Save and Open.""")
         self.helpWindow.exec()
 
     def openFile(self):

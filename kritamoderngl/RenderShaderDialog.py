@@ -1,7 +1,7 @@
 from krita import *
 from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths
 from PyQt5.QtGui import QIntValidator, QFont
-from PyQt5.QtWidgets import QDialog, QFileDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
+from PyQt5.QtWidgets import QDialog, QFileDialog, QComboBox, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
 
 # Dialog box for render shader
 class RenderShaderDialog(QDialog):
@@ -31,9 +31,21 @@ class RenderShaderDialog(QDialog):
         self.vertLabel = QLabel("Vertex Shader:", self)
         self.vertLabel2 = QLabel("Number of vertices to render:", self)
         self.vertNumber = QLineEdit("-1", self)
+        self.vertLabel3 = QLabel("Primitive mode:", self)
         self.vertNumber.setValidator(QIntValidator(-1, 2147483647, self))
+        self.vertMode = QComboBox()
+        self.vertMode.addItems(
+            ["Points",
+            "Lines",
+            "Line Loop",
+            "Line Strip",
+            "Triangles",
+            "Triangle Strip",
+            "Triangle Fan"])
         self.vertLayout.addWidget(self.vertLabel2)
         self.vertLayout.addWidget(self.vertNumber)
+        self.vertLayout.addWidget(self.vertLabel3)
+        self.vertLayout.addWidget(self.vertMode)
         self.vertBox = QTextEdit()
         self.vertBox.setAcceptRichText(False)
         self.vertBox.setTabChangesFocus(False)
@@ -120,6 +132,24 @@ class RenderShaderDialog(QDialog):
                 vertices = int(self.vertNumber.text())
                 if vertices != -1:
                     vao.vertices = vertices
+                # Set the primitive drawing mode
+                match self.vertMode.currentIndex():
+                    case 0:
+                        vao.mode = ctx.POINTS
+                    case 1:
+                        vao.mode = ctx.LINES
+                    case 2:
+                        vao.mode = ctx.LINE_LOOP
+                    case 3:
+                        vao.mode = ctx.LINE_STRIP
+                    case 4:
+                        vao.mode = ctx.TRIANGLES
+                    case 5:
+                        vao.mode = ctx.TRIANGLE_STRIP
+                    case 6:
+                        vao.mode = ctx.TRIANGLE_FAN
+                    case _:
+                        vao.mode = ctx.TRIANGLES
             except ValueError as e:
                 # Could not parse number of vertices, good luck
                 pass
@@ -152,11 +182,12 @@ class RenderShaderDialog(QDialog):
 
    > No vertices are fed into the vertex shader from the program, you will need to define your own vertices inside the shader to render.
    > Use the text box above the vertex shader to specify how many vertices are to be processed.
-   > The render primitive mode is triangles since this is the default.
+   > Change the primitive draw mode using the selection box next to the box to specify the number of vertices.
    > Varyings output from the vertex shader can be used as inputs to the fragment shader.
    > The output of the fragment shader will be rendered to a new layer added above the current selected layer.
    > The current selected layer can be used as a texture input with uniform sampler2D.
-   > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.""")
+   > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.
+   > Shader files can be saved and loaded using Save and Open, selecting a vertex shader first then a fragment shader.""")
         self.helpWindow.exec()
 
     def openFile(self):
@@ -215,6 +246,7 @@ class RenderShaderDialog(QDialog):
             self.geometry().height() - self.geometryDelta.height())
         self.ext.settings.setValue("mgl_geometry", rect)
         self.ext.settings.setValue("mgl_vert_number", self.vertNumber.text())
+        self.ext.settings.setValue("mgl_vert_mode", self.vertMode.currentIndex())
         if self.vertBox.toPlainText() != "":
             self.ext.settings.setValue("mgl_vert_shader", self.vertBox.toPlainText())
         if self.fragBox.toPlainText() != "":
@@ -225,5 +257,6 @@ class RenderShaderDialog(QDialog):
         self.readGeometry = self.ext.settings.value("mgl_geometry", QRect(200, 200, 800, 800))
         self.setGeometry(self.readGeometry)
         self.vertNumber.setText(self.ext.settings.value("mgl_vert_number", "-1"))
+        self.vertMode.setCurrentIndex(int(self.ext.settings.value("mgl_vert_mode", "4")))
         self.vertBox.setPlainText(self.ext.settings.value("mgl_vert_shader", ""))
         self.fragBox.setPlainText(self.ext.settings.value("mgl_frag_shader", ""))
