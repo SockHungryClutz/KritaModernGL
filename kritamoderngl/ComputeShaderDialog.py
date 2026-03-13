@@ -1,7 +1,8 @@
 from krita import *
-from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths
+from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths, QUuid
 from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
+from . import ComputeBufferMapperDialog
 
 # Dialog box for compute shader
 class ComputeShaderDialog(QDialog):
@@ -38,12 +39,23 @@ class ComputeShaderDialog(QDialog):
         self.compLabelZ = QLabel("Workgroup Z:", self)
         self.compWGZ = QLineEdit("1", self)
         self.compWGZ.setValidator(QIntValidator(1, 2147483647, self))
+        self.mapWindow = ComputeBufferMapperDialog.ComputeBufferMapperDialog(self)
+        self.settingSpacer = QLabel("   |   ", self)
+        self.mapButton = QPushButton("Map Buffers", self)
+        self.mapButton.clicked.connect(self.showMap)
+        try:
+            self.mapWindow.validateMapping()
+        except Exception as e:
+            self.mapButton.setIcon(Krita.instance().icon("warning"))
+            self.mapButton.setToolTip(f"Errors in configuration mapping, open to resolve\nMost likely, previous configuration referred to a layer that does not exist now\n\n{e.args[0]}")
         self.compLayout.addWidget(self.compLabelX)
         self.compLayout.addWidget(self.compWGX)
         self.compLayout.addWidget(self.compLabelY)
         self.compLayout.addWidget(self.compWGY)
         self.compLayout.addWidget(self.compLabelZ)
         self.compLayout.addWidget(self.compWGZ)
+        self.compLayout.addWidget(self.settingSpacer)
+        self.compLayout.addWidget(self.mapButton)
         self.compBox = QTextEdit()
         self.compBox.setAcceptRichText(False)
         self.compBox.setTabChangesFocus(False)
@@ -67,6 +79,7 @@ class ComputeShaderDialog(QDialog):
         
         self.setWindowTitle("OpenGL Shader Programming")
         self.setSizeGripEnabled(True)
+        self.installEventFilter(self)
         self.show()
         self.activateWindow()
         
@@ -78,41 +91,79 @@ class ComputeShaderDialog(QDialog):
             self.geometry().width() - self.readGeometry.width(),
             self.geometry().height() - self.readGeometry.height())
 
+    def eventFilter(self, obj, event):
+        # Because QDialog is a widget and not a window (even though it's literally a window),
+        # this filter is needed to detect when the window (widget) receives focus
+        # because the widget does not receive focus events when the window receives focus
+        if event.type() == QEvent.WindowActivate:
+            try:
+                self.mapWindow.validateMapping()
+                self.mapButton.setIcon(QIcon())
+                self.mapButton.setToolTip("")
+            except Exception as e:
+                self.mapButton.setIcon(Krita.instance().icon("warning"))
+                self.mapButton.setToolTip(f"Errors in configuration mapping, open to resolve\nMost likely, previous configuration referred to a layer that does not exist now\n\n{e.args[0]}")
+            return True
+        return super().eventFilter(obj, event)
+
+    def showMap(self):
+        # Simple function to show the buffer mapping window
+        self.mapWindow.open()
+
     def applyChanges(self):
         doc = Krita.instance().activeDocument()
         if not doc:
             self.errBox.setPlainText("You need to have a document open to use this script!")
             return
-        newNode = None
-        # Get information for the buffer format
-        # Number of components is the number of capitals in the color model, unless GRAYA
-        node = doc.activeNode()
-        colorModel = node.colorModel()
-        if colorModel == "GRAYA":
-            components = 2
-        else:
-            components = sum(1 for c in colorModel if c.isupper())
-        colorDepth = node.colorDepth()
-        colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
+        # Check layer validity before doing anything
+        try:
+            self.mapWindow.validateMapping()
+        except Exception as e:
+            self.errBox.setPlainText(f"Layer mapping is invalid, click Map Buffers and fix:\n{e.args[0]}")
+            return
+        newNodes = []
+        textures = []
         # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
         with self.ext.ctx as ctx:
-            # Create input texture from current layer
-            inputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
-            # Create output buffer with canvas size and color info
-            outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
             # Create a shader program from the text boxes
             try:
                 shader = ctx.compute_shader(self.compBox.toPlainText())
             except Exception as e:
                 self.errBox.setPlainText(str(e))
                 # Cleanup and early exit
-                inputTexture.release()
-                outputTexture.release()
+                if shader:
+                    shader.release()
                 self.saveSettings()
                 return
-            # Set the texture units for the textures
-            outputTexture.bind_to_image(0, read=True, write=True)
-            inputTexture.bind_to_image(1, read=True, write=False)
+            # Create input and output textures
+            for item in self.mapWindow.textureMapItems:
+                if item.layerId == "<2>":
+                    # Special case for new node
+                    # Get color format data from the node
+                    components, colorType = self.getColorComponentsAndType(doc)
+                    texture = ctx.texture((doc.width(), doc.height()), components, dtype=colorType)
+                else:
+                    if item.layerId == "<>":
+                        # Special case for current node
+                        node = doc.activeNode()
+                    else:
+                        node = doc.nodeByUniqueID(QUuid(item.layerId))
+                    # Get color format data from the node
+                    components, colorType = self.getColorComponentsAndType(node)
+                    texture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
+                textures.append(texture)
+                try:
+                    # Set the texture units for the textures
+                    # Because compute shaders require OpenGL >= 4.3, we can use convenient and easy methods to bind textures
+                    texture.bind_to_image(item.index, read=item.read, write=item.write)
+                except Exception as e:
+                    self.errBox.setPlainText(str(e))
+                    # Cleanup and early exit
+                    for i in textures:
+                        i.release()
+                    shader.release()
+                    return
+            # Try to get the workgroup dimensions
             try:
                 workgroupX = int(self.compWGX.text())
                 workgroupY = int(self.compWGY.text())
@@ -125,28 +176,50 @@ class ComputeShaderDialog(QDialog):
             try:
                 shader.run(workgroupX, workgroupY, workgroupZ)
                 ctx.finish()
-                # Put the result into a new node
-                newNode = doc.createNode("Render Result", "paintlayer")
-                newNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
+                # Copy the output pixel data
+                for index in range(len(self.mapWindow.textureMapItems)):
+                    output = self.mapWindow.textureMapItems[index]
+                    if not output.write:
+                        continue
+                    if output.layerId == "<>":
+                        node = doc.activeNode()
+                    elif output.layerId == "<2>":
+                        node = doc.createNode(f"Render Result {index}", "paintlayer")
+                        newNodes.append(node)
+                    else:
+                        node = doc.nodeByUniqueID(QUuid(output.layerId))
+                    node.setPixelData(textures[index].read(), 0, 0, doc.width(), doc.height())
             except Exception as e:
                 self.errBox.setPlainText(str(e))
             # Cleanup
-            inputTexture.release()
-            outputTexture.release()
+            for i in textures:
+                i.release()
             shader.release()
-        if newNode:
-            # Exit the context scope before adding a new node
-            node.parentNode().addChildNode(newNode, node)
-            doc.refreshProjection()
+        # Exit the context scope before adding new nodes
+        for newNode in newNodes:
+            doc.activeNode().parentNode().addChildNode(newNode, doc.activeNode())
+        doc.refreshProjection()
         self.saveSettings()
+
+    def getColorComponentsAndType(self, node):
+        # Helper function to get the number of components and data type from a node
+        colorModel = node.colorModel()
+        # Number of components is the number of capitals in the color model, unless GRAYA
+        if colorModel == "GRAYA":
+            components = 2
+        else:
+            components = sum(1 for c in colorModel if c.isupper())
+        colorDepth = node.colorDepth()
+        colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
+        return components, colorDepth
 
     def showHelp(self):
         self.helpWindow.setText("Krita ModernGL Compute Shader Programming")
         self.helpWindow.setInformativeText("""This tool is designed for running GLSL compute shaders inside of Krita and rendering their output to a new layer in the current document. If you would like to learn more, https://www.khronos.org/opengl/wiki/Compute_Shader has essential resources. Here are some more useful bits of info:
 
-   > The output texture is bound to texture unit 0.
-   > The input texture is taken from the current selected layer and is bound to texture unit 1.
-   > The output will be rendered to a new layer added above the current selected layer.
+   > The three Work Group text boxes control the dimensions for the compute shader.
+   > Input and output textures can be configured using the Map Buffers button on top left.
+   > By default, the active layer is the input on texture unit 1, and the output uses texture unit 0 and will be added to a new layer above the active layer.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.
    > Shader files can be saved and loaded using Save and Open.""")
         self.helpWindow.exec()
@@ -158,8 +231,9 @@ class ComputeShaderDialog(QDialog):
             "Select a file to open",
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Compute Shaders (*.comp)")
-        with open(file[0], 'r') as cf:
-            self.compBox.setPlainText(cf.read())
+        if file[0]:
+            with open(file[0], 'r') as cf:
+                self.compBox.setPlainText(cf.read())
 
     def saveFile(self):
         # Open a file save dialog
@@ -169,8 +243,9 @@ class ComputeShaderDialog(QDialog):
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Compute Shaders (*.comp)")
         # Write the contents of the text box to file
-        with open(file[0], 'w') as cf:
-            cf.write(self.compBox.toPlainText())
+        if file[0]:
+            with open(file[0], 'w') as cf:
+                cf.write(self.compBox.toPlainText())
 
     def saveAndReject(self):
         self.saveSettings()

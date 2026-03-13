@@ -1,7 +1,8 @@
 from krita import *
-from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths
-from PyQt5.QtGui import QIntValidator, QFont
-from PyQt5.QtWidgets import QDialog, QFileDialog, QComboBox, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
+from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths, QEvent, QUuid
+from PyQt5.QtGui import QIntValidator, QFont, QIcon
+from PyQt5.QtWidgets import QDialog, QFileDialog, QDialogButtonBox, QComboBox, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit, QPushButton
+from . import RenderBufferMapperDialog
 
 # Dialog box for render shader
 class RenderShaderDialog(QDialog):
@@ -26,13 +27,16 @@ class RenderShaderDialog(QDialog):
         self.setWindowModality(Qt.WindowModal)
         monoFont = QFont("Monospace")
         monoFont.setStyleHint(QFont.TypeWriter)
+
+        # New buffer mapper screen to configure input and output textures
+        self.mapWindow = RenderBufferMapperDialog.RenderBufferMapperDialog(self)
         
-        self.vertLayout = QHBoxLayout()
+        self.settingLayout = QHBoxLayout()
         self.vertLabel = QLabel("Vertex Shader:", self)
-        self.vertLabel2 = QLabel("Number of vertices to render:", self)
+        self.settingLabel = QLabel("Number of vertices to render:", self)
         self.vertNumber = QLineEdit("-1", self)
-        self.vertLabel3 = QLabel("Primitive mode:", self)
         self.vertNumber.setValidator(QIntValidator(-1, 2147483647, self))
+        self.settingLabel2 = QLabel("Primitive mode:", self)
         self.vertMode = QComboBox()
         self.vertMode.addItems(
             ["Points",
@@ -42,10 +46,23 @@ class RenderShaderDialog(QDialog):
             "Triangles",
             "Triangle Strip",
             "Triangle Fan"])
-        self.vertLayout.addWidget(self.vertLabel2)
-        self.vertLayout.addWidget(self.vertNumber)
-        self.vertLayout.addWidget(self.vertLabel3)
-        self.vertLayout.addWidget(self.vertMode)
+        self.vertMode.setInsertPolicy(QComboBox.NoInsert)
+        self.settingSpacer = QLabel("   |   ", self)
+
+        self.mapButton = QPushButton("Map Buffers", self)
+        self.mapButton.clicked.connect(self.showMap)
+        try:
+            self.mapWindow.validateMapping()
+        except Exception as e:
+            self.mapButton.setIcon(Krita.instance().icon("warning"))
+            self.mapButton.setToolTip(f"Errors in configuration mapping, open to resolve\nMost likely, previous configuration referred to a layer that does not exist now\n\n{e.args[0]}")
+        
+        self.settingLayout.addWidget(self.settingLabel)
+        self.settingLayout.addWidget(self.vertNumber)
+        self.settingLayout.addWidget(self.settingLabel2)
+        self.settingLayout.addWidget(self.vertMode)
+        self.settingLayout.addWidget(self.settingSpacer)
+        self.settingLayout.addWidget(self.mapButton)
         self.vertBox = QTextEdit()
         self.vertBox.setAcceptRichText(False)
         self.vertBox.setTabChangesFocus(False)
@@ -64,8 +81,8 @@ class RenderShaderDialog(QDialog):
         self.errBox.setPlaceholderText("Enter shader code above and click Run, warnings and errors will appear here.")
         
         vbox = QVBoxLayout(self)
+        vbox.addLayout(self.settingLayout)
         vbox.addWidget(self.vertLabel)
-        vbox.addLayout(self.vertLayout)
         vbox.addWidget(self.vertBox)
         vbox.addWidget(self.fragLabel)
         vbox.addWidget(self.fragBox)
@@ -77,6 +94,7 @@ class RenderShaderDialog(QDialog):
         
         self.setWindowTitle("OpenGL Shader Programming")
         self.setSizeGripEnabled(True)
+        self.installEventFilter(self)
         self.show()
         self.activateWindow()
         
@@ -87,47 +105,117 @@ class RenderShaderDialog(QDialog):
             self.geometry().y() - self.readGeometry.y(),
             self.geometry().width() - self.readGeometry.width(),
             self.geometry().height() - self.readGeometry.height())
+    
+    def eventFilter(self, obj, event):
+        # Because QDialog is a widget and not a window (even though it's literally a window),
+        # this filter is needed to detect when the window (widget) receives focus
+        # because the widget does not receive focus events when the window receives focus
+        if event.type() == QEvent.WindowActivate:
+            try:
+                self.mapWindow.validateMapping()
+                self.mapButton.setIcon(QIcon())
+                self.mapButton.setToolTip("")
+            except Exception as e:
+                self.mapButton.setIcon(Krita.instance().icon("warning"))
+                self.mapButton.setToolTip(f"Errors in configuration mapping, open to resolve\nMost likely, previous configuration referred to a layer that does not exist now\n\n{e.args[0]}")
+            return True
+        return super().eventFilter(obj, event)
+
+    def showMap(self):
+        # Simple function to show the buffer mapping window
+        self.mapWindow.open()
 
     def applyChanges(self):
         doc = Krita.instance().activeDocument()
         if not doc:
             self.errBox.setPlainText("You need to have a document open to use this script!")
             return
-        newNode = None
-        # Get information for the buffer format
-        # Number of components is the number of capitals in the color model, unless GRAYA
-        node = doc.activeNode()
-        colorModel = node.colorModel()
-        if colorModel == "GRAYA":
-            components = 2
-        else:
-            components = sum(1 for c in colorModel if c.isupper())
-        colorDepth = node.colorDepth()
-        colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
+        # Check layer map validity before doing anything
+        try:
+            self.mapWindow.validateMapping()
+        except Exception as e:
+            self.errBox.setPlainText(f"Layer mapping is invalid, click Map Buffers and fix:\n{e.args[0]}")
+            return
+        newNodes = []
+        inputTextures = []
         # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
         with self.ext.ctx as ctx:
-            ## Create input texture from current layer
-            inputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorDepth)
-            ## Create output buffer with canvas size and color info
-            outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorDepth)
-            outFrameBuffer = ctx.framebuffer([outputTexture])
-            ## Create a shader program from the text boxes
+            # Create a shader program from the text boxes
             try:
                 program = ctx.program(
                     vertex_shader=self.vertBox.toPlainText(),
                     fragment_shader=self.fragBox.toPlainText())
             except Exception as e:
+                # Failure here means likely no OGL objects to clean up
+                self.errBox.setPlainText(str(e))
+                if program:
+                    program.release()
+                return
+            # Map inputs from the input mapper
+            for input in self.mapWindow.inputTextureMapItems:
+                # Get node this item references
+                if input.layerId == "<>":
+                    node = doc.activeNode()
+                else:
+                    node = doc.nodeByUniqueID(QUuid(input.layerId))
+                # Get color format data from the node
+                components, colorType = self.getColorComponentsAndType(node)
+                # Create input texture from current layer
+                inputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
+                # Set up some attributes for the input texture
+                inputTexture.repeat_x = input.repeat
+                inputTexture.repeat_y = input.repeat
+                inputTexture.filter = (ctx.LINEAR, ctx.LINEAR)
+                inputTextures.append(inputTexture)
+                # Attempt to bind the textures to the program and texture units and assign samplers
+                try:
+                    inputTexture.use(location=input.index)
+                    if input.variableName:
+                        program[input.variableName] = input.index
+                except Exception as e:
+                    self.errBox.setPlainText(str(e))
+                    # Cleanup and early exit
+                    for i in inputTextures:
+                        i.release()
+                    program.release()
+                    return
+            outputTextures = []
+            # Create output textures with information from the mapper
+            for output in self.mapWindow.outputTextureMapItems:
+                if output.layerId == "<>":
+                    # Special case for new layer
+                    # TODO: Should there be a way to specify different color formats?
+                    components, colorType = self.getColorComponentsAndType(node)
+                    outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorType)
+                else:
+                    node = doc.nodeByUniqueID(QUuid(output.layerId))
+                    components, colorType = self.getColorComponentsAndType(node)
+                    # Copy the pixel data to the texture, in case it doesn't all get overwritten
+                    outputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
+                outputTexture.repeat_x = output.repeat
+                outputTexture.repeat_y = output.repeat
+                # Filtering shouldn't be needed on output?
+                #outputTexture.filter = (ctx.LINEAR, ctx.LINEAR)
+                outputTextures.append(outputTexture)
+            # Attempt to create and bind the framebuffer
+            try:
+                # Create framebuffer with all output textures
+                outFrameBuffer = ctx.framebuffer(outputTextures)
+                outFrameBuffer.use() # Bind the framebuffer to the program
+                vao = ctx.vertex_array(program, [])
+            except Exception as e:
                 self.errBox.setPlainText(str(e))
                 # Cleanup and early exit
-                inputTexture.release()
-                outputTexture.release()
-                outFrameBuffer.release()
-                self.saveSettings()
+                for i in inputTextures:
+                    i.release()
+                for o in outputTextures:
+                    o.release()
+                if outFrameBuffer:
+                    outFrameBuffer.release()
+                if vao:
+                    vao.release()
+                program.release()
                 return
-            # Set the texture units for the textures
-            outFrameBuffer.use() # Through magic, framebuffers are automatically used as output
-            inputTexture.use() # And textures can be used as input with a sampler2D
-            vao = ctx.vertex_array(program, [])
             try:
                 vertices = int(self.vertNumber.text())
                 if vertices != -1:
@@ -159,36 +247,60 @@ class RenderShaderDialog(QDialog):
             try:
                 vao.render()
                 ctx.finish()
-                # Put the result into a new node
-                newNode = doc.createNode("Render Result", "paintlayer")
-                newNode.setPixelData(outputTexture.read(), 0, 0, doc.width(), doc.height())
+                # Create and draw as many new nodes as needed
+                for index in range(len(self.mapWindow.outputTextureMapItems)):
+                    output = self.mapWindow.outputTextureMapItems[index]
+                    if output.layerId == "<>":
+                        # Put the result into a new node
+                        # TODO: If output color format differs from document, this new node's color format needs to be changed to match
+                        node = doc.createNode(f"Render Result {index}", "paintlayer")
+                        newNodes.append(node)
+                    else:
+                        node = doc.nodeByUniqueID(QUuid(output.layerId))
+                    node.setPixelData(outputTextures[index].read(), 0, 0, doc.width(), doc.height())
+                self.errBox.setPlainText("")
             except Exception as e:
                 self.errBox.setPlainText(str(e))
             # Cleanup
-            inputTexture.release()
-            outputTexture.release()
+            for i in inputTextures:
+                i.release()
+            for o in outputTextures:
+                o.release()
             outFrameBuffer.release()
             vao.release()
             program.release()
-        if newNode:
-            # Exit the context scope before adding a new node
-            node.parentNode().addChildNode(newNode, node)
-            doc.refreshProjection()
+        # Exit the context scope before adding new nodes
+        for newNode in newNodes:
+            doc.activeNode().parentNode().addChildNode(newNode, doc.activeNode())
+        doc.refreshProjection()
         self.saveSettings()
 
+    def getColorComponentsAndType(self, node):
+        # Helper function to get the number of components and data type from a node
+        colorModel = node.colorModel()
+        # Number of components is the number of capitals in the color model, unless GRAYA
+        if colorModel == "GRAYA":
+            components = 2
+        else:
+            components = sum(1 for c in colorModel if c.isupper())
+        colorDepth = node.colorDepth()
+        colorDepth = colorDepth[0].lower() + str(int(colorDepth[1:]) // 8)
+        return components, colorDepth
+
     def showHelp(self):
+        # TODO: Add information about buffer mapping to help menu, double check all other information needed is present and correct otherwise
         self.helpWindow.setText("Krita ModernGL Render Shader Programming")
         self.helpWindow.setInformativeText("""This tool is designed for running GLSL vertex and fragment shaders inside of Krita and rendering their output to a new layer in the current document. If you would like to learn more, https://learnopengl.com has good tutorials. Here are some more useful bits of info:
 
    > No vertices are fed into the vertex shader from the program, you will need to define your own vertices inside the shader to render.
    > Use the text box above the vertex shader to specify how many vertices are to be processed.
    > Change the primitive draw mode using the selection box next to the box to specify the number of vertices.
+   > Input and output textures can be configured using the Map Buffers button.
+   > By default, the active layer is the input, and the output will be added to a new layer above the active layer.
    > Varyings output from the vertex shader can be used as inputs to the fragment shader.
-   > The output of the fragment shader will be rendered to a new layer added above the current selected layer.
-   > The current selected layer can be used as a texture input with uniform sampler2D.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.
    > Shader files can be saved and loaded using Save and Open, selecting a vertex shader first then a fragment shader.""")
-        self.helpWindow.exec()
+        self.helpWindow.open()
 
     def openFile(self):
         # Because this has two shaders to save, this will open two different dialogs
@@ -199,16 +311,18 @@ class RenderShaderDialog(QDialog):
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Vertex Shaders (*.vert)")
         # Load the selected shaders into the text boxes
-        with open(file[0], 'r') as vf:
-            self.vertBox.setPlainText(vf.read())
+        if file[0]:
+            with open(file[0], 'r') as vf:
+                self.vertBox.setPlainText(vf.read())
         # Open a file selection dialog for the next shader
         file = QFileDialog.getOpenFileName(
             self,
             "Select a file to open",
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Fragment Shaders (*.frag)")
-        with open(file[0], 'r') as ff:
-            self.fragBox.setPlainText(ff.read())
+        if file[0]:
+            with open(file[0], 'r') as ff:
+                self.fragBox.setPlainText(ff.read())
 
     def saveFile(self):
         # This will also open two dialogs to save the two different shaders
@@ -219,16 +333,18 @@ class RenderShaderDialog(QDialog):
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Vertex Shaders (*.vert)")
         # Write the contents of the text box to file
-        with open(file[0], 'w') as vf:
-            vf.write(self.vertBox.toPlainText())
+        if file[0]:
+            with open(file[0], 'w') as vf:
+                vf.write(self.vertBox.toPlainText())
         # Open a file save dialog for the second shader
         file = QFileDialog.getSaveFileName(
             self,
             "Save File",
             Krita.getAppDataLocation() + "/pykrita/kritamoderngl",
             "Fragment Shaders (*.frag)")
-        with open(file[0], 'w') as ff:
-            ff.write(self.fragBox.toPlainText())
+        if file[0]:
+            with open(file[0], 'w') as ff:
+                ff.write(self.fragBox.toPlainText())
 
     def saveAndReject(self):
         self.saveSettings()

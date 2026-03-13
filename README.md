@@ -3,8 +3,9 @@
 Plugin for programming vertex, fragment, and compute shaders in Krita.  
 
 * Supports all color depths and formats as input and output  
-* Use the current selected layer as a texture input  
-* The result is added to a new layer above the current layer  
+* Use the currently selected layer as a texture input, or any layer in the document  
+* The result can be added to a new layer above the current layer, or overwrite an existing layer  
+* Multiple input and output textures can be used  
 
 ## How to Install
 
@@ -19,9 +20,9 @@ Plugin for programming vertex, fragment, and compute shaders in Krita.
 
 ## How to Use
 
-With an open document active, select a layer you want to use as input, then find the OpenGL tool to use under the Tools menu.
+Find the OpenGL tool to use under the Tools menu. You can choose which layer to map to each texture unit in the menu. Any errors in your program will appear in the UI.  
 
-Use the **Help** button to see a more descriptive explination of each option.
+Use the **Help** button to see a more descriptive explanation of each option.
 
 ## Examples
 
@@ -47,16 +48,17 @@ Fragment shader that slightly shifts the red and blue channels
 ```
 #version 330 core
 
-uniform sampler2D in_texture;
+uniform usampler2D in_texture;
+layout(location = 0) out uvec4 out_color;
 
 void main() {
     vec2 texSize  = textureSize(in_texture, 0).xy;
     vec2 texCoord = gl_FragCoord.xy / texSize;
 
-    vec4 rValue = texture(in_texture, texCoord + 0.005);
-    vec4 gValue = texture(in_texture, texCoord);
-    vec4 bValue = texture(in_texture, texCoord - 0.005);
-    gl_FragColor = vec4(rValue.r, gValue.g, bValue.b, 1.0);
+    ivec4 rValue = ivec4(texture(in_texture, texCoord + 0.005));
+    ivec4 gValue = ivec4(texture(in_texture, texCoord));
+    ivec4 bValue = ivec4(texture(in_texture, texCoord - 0.005));
+    out_color = uvec4(rValue.r, gValue.g, bValue.b, 1.0);
 }
 ```
 

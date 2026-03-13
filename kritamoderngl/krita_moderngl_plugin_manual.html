@@ -6,11 +6,12 @@
     <body>
         <h1>Krita ModernGL - Modern OpenGL Shader Programming</h1>
         <p>Plugin for programming vertex, fragment, and compute shaders in Krita.</p>
-        <p>Version 1.0.2</p>
+        <p>Version 1.1.0</p>
         <ul>
             <li>Supports all color depths and formats as input and output</li>
-            <li>Use the current selected layer as a texture input</li>
-            <li>The result is added to a new layer above the current layer</li>
+            <li>Use the currently selected layer as a texture input, or any layer in the document</li>
+            <li>The result can be added to a new layer above the current layer, or overwrite an existing layer</li>
+            <li>Multiple input and output textures can be used</li>
         </ul>
         <h2>How to Install</h2>
         <ol>
@@ -24,8 +25,8 @@
             <li>Close and reopen Krita again</li>
         </ol>
         <h2>How to Use</h2>
-        <p>With an open document active, select a layer you want to use as input, then find the OpenGL tool to use under the Tools menu.</p>
-        <p>Use the <b>Help</b> button to see a more descriptive explination of each option.</p>
+        <p>Find the OpenGL tool to use under the Tools menu. You can choose which layer to map to each texture unit in the menu. Any errors in your program will appear in the UI.</p>
+        <p>Use the <b>Help</b> button to see a more descriptive explanation of each option.</p>
         <h3>Extra Notes</h3>
         <p>This plugin relies on the ModernGL and GLContext python modules, provided under the MIT license. A copy of this licence is provided in this repository. This plugin is provided under the same license.</p>
     </body>
