@@ -55,10 +55,10 @@ void main() {
     vec2 texSize  = textureSize(in_texture, 0).xy;
     vec2 texCoord = gl_FragCoord.xy / texSize;
 
-    ivec4 rValue = ivec4(texture(in_texture, texCoord + 0.005));
-    ivec4 gValue = ivec4(texture(in_texture, texCoord));
-    ivec4 bValue = ivec4(texture(in_texture, texCoord - 0.005));
-    out_color = uvec4(rValue.r, gValue.g, bValue.b, 1.0);
+    uvec4 rValue = uvec4(texture(in_texture, texCoord + 0.005));
+    uvec4 gValue = uvec4(texture(in_texture, texCoord));
+    uvec4 bValue = uvec4(texture(in_texture, texCoord - 0.005));
+    out_color = uvec4(rValue.r, gValue.g, bValue.b, 255);
 }
 ```
 
