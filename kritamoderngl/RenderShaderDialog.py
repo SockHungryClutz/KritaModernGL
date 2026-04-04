@@ -165,7 +165,6 @@ class RenderShaderDialog(QDialog):
                 # Set up some attributes for the input texture
                 inputTexture.repeat_x = input.repeat
                 inputTexture.repeat_y = input.repeat
-                inputTexture.filter = (ctx.LINEAR, ctx.LINEAR)
                 inputTextures.append(inputTexture)
                 # Attempt to bind the textures to the program and texture units and assign samplers
                 try:
@@ -194,8 +193,6 @@ class RenderShaderDialog(QDialog):
                     outputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
                 outputTexture.repeat_x = output.repeat
                 outputTexture.repeat_y = output.repeat
-                # Filtering shouldn't be needed on output?
-                #outputTexture.filter = (ctx.LINEAR, ctx.LINEAR)
                 outputTextures.append(outputTexture)
             # Attempt to create and bind the framebuffer
             try:
@@ -288,7 +285,6 @@ class RenderShaderDialog(QDialog):
         return components, colorDepth
 
     def showHelp(self):
-        # TODO: Add information about buffer mapping to help menu, double check all other information needed is present and correct otherwise
         self.helpWindow.setText("Krita ModernGL Render Shader Programming")
         self.helpWindow.setInformativeText("""This tool is designed for running GLSL vertex and fragment shaders inside of Krita and rendering their output to a new layer in the current document. If you would like to learn more, https://learnopengl.com has good tutorials. Here are some more useful bits of info:
 
