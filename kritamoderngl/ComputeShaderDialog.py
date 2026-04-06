@@ -123,6 +123,7 @@ class ComputeShaderDialog(QDialog):
             return
         newNodes = []
         textures = []
+        shader = None
         # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
         with self.ext.ctx as ctx:
             # Create a shader program from the text boxes
