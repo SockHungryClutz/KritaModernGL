@@ -1,8 +1,8 @@
 from krita import *
 from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths, QEvent, QUuid
 from PyQt5.QtGui import QIntValidator, QFont, QIcon
-from PyQt5.QtWidgets import QDialog, QFileDialog, QDialogButtonBox, QComboBox, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit, QPushButton
-from . import RenderBufferMapperDialog
+from PyQt5.QtWidgets import QDialog, QFileDialog, QDialogButtonBox, QComboBox, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit, QPushButton, QCheckBox
+from . import RenderBufferMapperDialog, RgbaCorrectionHelper
 
 # Dialog box for render shader
 class RenderShaderDialog(QDialog):
@@ -48,7 +48,7 @@ class RenderShaderDialog(QDialog):
             "Triangle Fan"])
         self.vertMode.setInsertPolicy(QComboBox.NoInsert)
         self.settingSpacer = QLabel("   |   ", self)
-
+        
         self.mapButton = QPushButton("Map Buffers", self)
         self.mapButton.clicked.connect(self.showMap)
         try:
@@ -67,6 +67,13 @@ class RenderShaderDialog(QDialog):
         self.vertBox.setAcceptRichText(False)
         self.vertBox.setTabChangesFocus(False)
         self.vertBox.setFont(monoFont)
+
+        self.rgbaColorCorrector = RgbaCorrectionHelper.RgbaCorrectionHelper()
+        self.rgbaCorrectCheck = QCheckBox("Fix RGBA color channel order", self)
+        self.rgbaCorrectCheck.setChecked(True)
+        self.rgbaCorrectCheck.setToolTip("""Attempt to ensure the red and blue color channels are in the correct order when using RGBA color mode.
+When this is checked, RGBA channels should be in the correct order. Else, red and blue channels may be swapped.
+If you notice issues with the order of red and blue color channels, try toggling this option.""")
         
         self.fragLabel = QLabel("Fragment Shader:", self)
         self.fragBox = QTextEdit()
@@ -82,6 +89,7 @@ class RenderShaderDialog(QDialog):
         
         vbox = QVBoxLayout(self)
         vbox.addLayout(self.settingLayout)
+        vbox.addWidget(self.rgbaCorrectCheck)
         vbox.addWidget(self.vertLabel)
         vbox.addWidget(self.vertBox)
         vbox.addWidget(self.fragLabel)
@@ -105,7 +113,7 @@ class RenderShaderDialog(QDialog):
             self.geometry().y() - self.readGeometry.y(),
             self.geometry().width() - self.readGeometry.width(),
             self.geometry().height() - self.readGeometry.height())
-    
+
     def eventFilter(self, obj, event):
         # Because QDialog is a widget and not a window (even though it's literally a window),
         # this filter is needed to detect when the window (widget) receives focus
@@ -168,6 +176,9 @@ class RenderShaderDialog(QDialog):
                 # Set up some attributes for the input texture
                 inputTexture.repeat_x = input.repeat
                 inputTexture.repeat_y = input.repeat
+                # This is to fix RGBA color mode actually being BGRA with integer color depth
+                if self.rgbaCorrectCheck.isChecked():
+                    self.rgbaColorCorrector.SwizzleTextureIfNeeded(node, inputTexture)
                 inputTextures.append(inputTexture)
                 # Attempt to bind the textures to the program and texture units and assign samplers
                 try:
@@ -187,6 +198,7 @@ class RenderShaderDialog(QDialog):
                 if output.layerId == "<>":
                     # Special case for new layer
                     # TODO: Should there be a way to specify different color formats?
+                    node = doc
                     components, colorType = self.getColorComponentsAndType(node)
                     outputTexture = ctx.texture((doc.width(), doc.height()), components, dtype=colorType)
                 else:
@@ -196,6 +208,8 @@ class RenderShaderDialog(QDialog):
                     outputTexture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
                 outputTexture.repeat_x = output.repeat
                 outputTexture.repeat_y = output.repeat
+                if self.rgbaCorrectCheck.isChecked():
+                    self.rgbaColorCorrector.FixTextureIfNeeded(node, outputTexture)
                 outputTextures.append(outputTexture)
             # Attempt to create and bind the framebuffer
             try:
@@ -247,7 +261,10 @@ class RenderShaderDialog(QDialog):
             try:
                 vao.render()
                 ctx.finish()
-                # Create and draw as many new nodes as needed
+                # Run the RGBA channel correction pass if needed
+                if self.rgbaCorrectCheck.isChecked():
+                    self.rgbaColorCorrector.RenderCorrectionIfNeeded(ctx, doc)
+                # Copy data from output buffers to nodes
                 for index in range(len(self.mapWindow.outputTextureMapItems)):
                     output = self.mapWindow.outputTextureMapItems[index]
                     if output.layerId == "<>":
@@ -257,7 +274,9 @@ class RenderShaderDialog(QDialog):
                         newNodes.append(node)
                     else:
                         node = doc.nodeByUniqueID(QUuid(output.layerId))
-                    node.setPixelData(outputTextures[index].read(), 0, 0, doc.width(), doc.height())
+                    # If this output needed color channel correction, use the corrected texture
+                    textureToUse = outputTextures[index] if not (self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.NodeNeedsCorrection(node)) else self.rgbaColorCorrector.GetNextCorrectedTexture()
+                    node.setPixelData(textureToUse.read(), 0, 0, doc.width(), doc.height())
                 self.errBox.setPlainText("")
             except Exception as e:
                 self.errBox.setPlainText(str(e))
@@ -269,6 +288,7 @@ class RenderShaderDialog(QDialog):
             outFrameBuffer.release()
             vao.release()
             program.release()
+            self.rgbaColorCorrector.CleanUp()
         # Exit the context scope before adding new nodes
         for newNode in newNodes:
             doc.activeNode().parentNode().addChildNode(newNode, doc.activeNode())
@@ -297,6 +317,7 @@ class RenderShaderDialog(QDialog):
    > Input and output textures can be configured using the Map Buffers button.
    > By default, the active layer is the input, and the output will be added to a new layer above the active layer.
    > Varyings output from the vertex shader can be used as inputs to the fragment shader.
+   > Fix RGBA color channel order option will try to ensure colors are in the correct channels, else red and blue could be swapped.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.
    > Shader files can be saved and loaded using Save and Open, selecting a vertex shader first then a fragment shader.""")
         self.helpWindow.open()
@@ -362,6 +383,7 @@ class RenderShaderDialog(QDialog):
         self.ext.settings.setValue("mgl_geometry", rect)
         self.ext.settings.setValue("mgl_vert_number", self.vertNumber.text())
         self.ext.settings.setValue("mgl_vert_mode", self.vertMode.currentIndex())
+        self.ext.settings.setValue("mgl_frag_rgba_fix", self.rgbaCorrectCheck.isChecked())
         if self.vertBox.toPlainText() != "":
             self.ext.settings.setValue("mgl_vert_shader", self.vertBox.toPlainText())
         if self.fragBox.toPlainText() != "":
@@ -373,5 +395,6 @@ class RenderShaderDialog(QDialog):
         self.setGeometry(self.readGeometry)
         self.vertNumber.setText(self.ext.settings.value("mgl_vert_number", "-1"))
         self.vertMode.setCurrentIndex(int(self.ext.settings.value("mgl_vert_mode", "4")))
+        self.rgbaCorrectCheck.setChecked(self.ext.settings.value("mgl_frag_rgba_fix", "true") == "true")
         self.vertBox.setPlainText(self.ext.settings.value("mgl_vert_shader", ""))
         self.fragBox.setPlainText(self.ext.settings.value("mgl_frag_shader", ""))

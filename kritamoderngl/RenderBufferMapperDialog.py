@@ -139,7 +139,7 @@ class RenderBufferMapperDialog(QDialog):
             except ValueError:
                 layerWidget.setCurrentIndex(0)
             repeatWidget = QCheckBox()
-            repeatWidget.setChecked(self.inputTextureMapItems[idx].repeat)
+            repeatWidget.setChecked(self.outputTextureMapItems[idx].repeat)
             repeatWidget.setToolTip("Set whether the texture repeats when sampling beyond the bounds.")
             # Assign the widgets to cells
             self.outputMap.setItem(idx, 0, indexWidget)

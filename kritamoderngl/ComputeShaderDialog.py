@@ -1,8 +1,9 @@
 from krita import *
 from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths, QUuid
 from PyQt5.QtGui import QIntValidator, QFont
-from PyQt5.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit
-from . import ComputeBufferMapperDialog
+from PyQt5.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit, QCheckBox
+from . import ComputeBufferMapperDialog, RgbaCorrectionHelper
+import traceback
 
 # Dialog box for compute shader
 class ComputeShaderDialog(QDialog):
@@ -27,6 +28,14 @@ class ComputeShaderDialog(QDialog):
         self.buttonBox.rejected.connect(self.saveAndReject)
         monoFont = QFont("Monospace")
         monoFont.setStyleHint(QFont.TypeWriter)
+
+        self.rgbaColorCorrector = RgbaCorrectionHelper.RgbaCorrectionHelper()
+        self.rgbaPrepassCorrector = RgbaCorrectionHelper.RgbaCorrectionHelper()
+        self.rgbaCorrectCheck = QCheckBox("Fix RGBA color channel order", self)
+        self.rgbaCorrectCheck.setChecked(True)
+        self.rgbaCorrectCheck.setToolTip("""Attempt to ensure the red and blue color channels are in the correct order when using RGBA color mode.
+When this is checked, RGBA channels should be in the correct order. Else, red and blue channels may be swapped.
+If you notice issues with the order of red and blue color channels, try toggling this option.""")
         
         self.compLabel = QLabel("Compute Shader:", self)
         self.compLayout = QHBoxLayout()
@@ -70,6 +79,7 @@ class ComputeShaderDialog(QDialog):
         vbox = QVBoxLayout(self)
         vbox.addWidget(self.compLabel)
         vbox.addLayout(self.compLayout)
+        vbox.addWidget(self.rgbaCorrectCheck)
         vbox.addWidget(self.compBox)
         vbox.addWidget(self.errLabel)
         vbox.addWidget(self.errBox)
@@ -122,6 +132,7 @@ class ComputeShaderDialog(QDialog):
             self.errBox.setPlainText(f"Layer mapping is invalid, click Map Buffers and fix:\n{e.args[0]}")
             return
         newNodes = []
+        images = []
         textures = []
         shader = None
         # Must specify this context otherwise Krita will cause issues if using OpenGL for main renderer
@@ -136,11 +147,12 @@ class ComputeShaderDialog(QDialog):
                     shader.release()
                 self.saveSettings()
                 return
-            # Create input and output textures
-            for item in self.mapWindow.textureMapItems:
+            # Create input and output images
+            for item in self.mapWindow.imageMapItems:
                 if item.layerId == "<2>":
                     # Special case for new node
-                    # Get color format data from the node
+                    # Get color format data from the document
+                    node = doc
                     components, colorType = self.getColorComponentsAndType(doc)
                     texture = ctx.texture((doc.width(), doc.height()), components, dtype=colorType)
                 else:
@@ -152,17 +164,69 @@ class ComputeShaderDialog(QDialog):
                     # Get color format data from the node
                     components, colorType = self.getColorComponentsAndType(node)
                     texture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
-                textures.append(texture)
+                # Perform RGBA color channel corrections on texture if needed
+                if self.rgbaCorrectCheck.isChecked() and item.read:
+                    # For some reason, swizzling does not work. Instead, use another corrector for prerender pass
+                    self.rgbaPrepassCorrector.FixTextureIfNeeded(node, texture)
+                images.append(texture)
+            # Perform prepass color order correction
+            if self.rgbaCorrectCheck.isChecked():
+                self.rgbaPrepassCorrector.RenderCorrectionIfNeeded(ctx, doc)
+            # Now assign all images to image units
+            for idx in range(len(self.mapWindow.imageMapItems)):
                 try:
-                    # Set the texture units for the textures
+                    item = self.mapWindow.imageMapItems[idx]
+                    # If this texture was part of the prepass, use the corrected texture instead
+                    if item.layerId == "<>":
+                        # Special case for current node
+                        node = doc.activeNode()
+                    elif item.layerId != "<2>":
+                        node = doc.nodeByUniqueID(QUuid(item.layerId))
+                    else:
+                        node = doc
+                    textureWasFixed = self.rgbaCorrectCheck.isChecked() and item.read and self.rgbaPrepassCorrector.NodeNeedsCorrection(node)
+                    textureToUse = images[idx] if not textureWasFixed else self.rgbaPrepassCorrector.GetNextCorrectedTexture()
+                    # Now also check if this texture will need post shader processing
+                    if self.rgbaCorrectCheck.isChecked() and item.write:
+                        self.rgbaColorCorrector.FixTextureIfNeeded(node, textureToUse)
+                    # Bind texture to image unit
                     # Because compute shaders require OpenGL >= 4.3, we can use convenient and easy methods to bind textures
-                    texture.bind_to_image(item.index, read=item.read, write=item.write)
+                    textureToUse.bind_to_image(item.index, read=item.read, write=item.write)
                 except Exception as e:
-                    self.errBox.setPlainText(str(e))
+                    self.errBox.setPlainText(traceback.format_exc() + "\n\n" + str(e))
                     # Cleanup and early exit
-                    for i in textures:
+                    for i in images:
                         i.release()
                     shader.release()
+                    self.rgbaPrepassCorrector.CleanUp()
+                    return
+            # Create textures for sampler inputs. These don't need a prepass fix because swizzling works
+            for item in self.mapWindow.textureMapItems:
+                if item.layerId == "<>":
+                    # Special case for current node
+                    node = doc.activeNode()
+                else:
+                    node = doc.nodeByUniqueID(QUuid(item.layerId))
+                components, colorType = self.getColorComponentsAndType(node)
+                texture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
+                # Perform RGBA color channel corrections on texture if needed
+                if self.rgbaCorrectCheck.isChecked():
+                    self.rgbaColorCorrector.SwizzleTextureIfNeeded(node, texture)
+                textures.append(texture)
+                # Attempt to bind the textures to the shader and texture units and assign samplers
+                try:
+                    texture.use(location=item.index)
+                    if item.variableName:
+                        shader[item.variableName] = item.index
+                except Exception as e:
+                    self.errBox.setPlainText(traceback.format_exc() + "\n\n" + str(e))
+                    # Cleanup and early exit
+                    for i in images:
+                        i.release()
+                    for t in textures:
+                        t.release()
+                    shader.release()
+                    self.rgbaPrepassCorrector.CleanUp()
                     return
             # Try to get the workgroup dimensions
             try:
@@ -171,15 +235,26 @@ class ComputeShaderDialog(QDialog):
                 workgroupZ = int(self.compWGZ.text())
             except ValueError as e:
                 self.errBox.setPlainText("Failed to parse workgroup dimensions:\n" + str(e))
+                for i in images:
+                    i.release()
+                for t in textures:
+                    t.release()
+                shader.release()
+                self.rgbaPrepassCorrector.CleanUp()
+                self.rgbaColorCorrector.CleanUp()
+                return
             
             ctx.clear()
             # Display any errors in warningWidget
             try:
                 shader.run(workgroupX, workgroupY, workgroupZ)
                 ctx.finish()
+                # Run the RGBA channel correction pass if needed
+                if self.rgbaCorrectCheck.isChecked():
+                    self.rgbaColorCorrector.RenderCorrectionIfNeeded(ctx, doc)
                 # Copy the output pixel data
-                for index in range(len(self.mapWindow.textureMapItems)):
-                    output = self.mapWindow.textureMapItems[index]
+                for index in range(len(self.mapWindow.imageMapItems)):
+                    output = self.mapWindow.imageMapItems[index]
                     if not output.write:
                         continue
                     if output.layerId == "<>":
@@ -189,13 +264,20 @@ class ComputeShaderDialog(QDialog):
                         newNodes.append(node)
                     else:
                         node = doc.nodeByUniqueID(QUuid(output.layerId))
-                    node.setPixelData(textures[index].read(), 0, 0, doc.width(), doc.height())
+                    # If this output needed color channel correction, use the corrected texture
+                    textureToUse = images[index] if not (self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.NodeNeedsCorrection(node)) else self.rgbaColorCorrector.GetNextCorrectedTexture()
+                    node.setPixelData(textureToUse.read(), 0, 0, doc.width(), doc.height())
+                self.errBox.setPlainText("")
             except Exception as e:
-                self.errBox.setPlainText(str(e))
+                self.errBox.setPlainText(traceback.format_exc() + "\n\n" + str(e))
             # Cleanup
-            for i in textures:
+            for i in images:
                 i.release()
+            for t in textures:
+                t.release()
             shader.release()
+            self.rgbaPrepassCorrector.CleanUp()
+            self.rgbaColorCorrector.CleanUp()
         # Exit the context scope before adding new nodes
         for newNode in newNodes:
             doc.activeNode().parentNode().addChildNode(newNode, doc.activeNode())
@@ -219,8 +301,10 @@ class ComputeShaderDialog(QDialog):
         self.helpWindow.setInformativeText("""This tool is designed for running GLSL compute shaders inside of Krita and rendering their output to a new layer in the current document. If you would like to learn more, https://www.khronos.org/opengl/wiki/Compute_Shader has essential resources. Here are some more useful bits of info:
 
    > The three Work Group text boxes control the dimensions for the compute shader.
-   > Input and output textures can be configured using the Map Buffers button on top left.
-   > By default, the active layer is the input on texture unit 1, and the output uses texture unit 0 and will be added to a new layer above the active layer.
+   > Input and output images and textures can be configured using the Map Buffers button on top left.
+   > By default, the active layer is the input on image unit 1, and the output uses image unit 0 and will be added to a new layer above the active layer.
+   > Textures can be configured as inputs to be used with samplers.
+   > Fix RGBA color channel order option will try to ensure colors are in the correct channels, else red and blue could be swapped.
    > There is no syntax highlighting, it is advisable you use some other editor to make the shaders.
    > Shader files can be saved and loaded using Save and Open.""")
         self.helpWindow.exec()
@@ -266,6 +350,7 @@ class ComputeShaderDialog(QDialog):
         self.ext.settings.setValue("mgl_comp_wgx", self.compWGX.text())
         self.ext.settings.setValue("mgl_comp_wgy", self.compWGY.text())
         self.ext.settings.setValue("mgl_comp_wgz", self.compWGZ.text())
+        self.ext.settings.setValue("mgl_comp_rgba_fix", self.rgbaCorrectCheck.isChecked())
         if self.compBox.toPlainText() != "":
             self.ext.settings.setValue("mgl_comp_shader", self.compBox.toPlainText())
         self.ext.settings.sync()
@@ -276,4 +361,5 @@ class ComputeShaderDialog(QDialog):
         self.compWGX.setText(self.ext.settings.value("mgl_comp_wgx", "1"))
         self.compWGY.setText(self.ext.settings.value("mgl_comp_wgy", "1"))
         self.compWGZ.setText(self.ext.settings.value("mgl_comp_wgz", "1"))
+        self.rgbaCorrectCheck.setChecked(self.ext.settings.value("mgl_comp_rgba_fix", "true") == "true")
         self.compBox.setPlainText(self.ext.settings.value("mgl_comp_shader", ""))
