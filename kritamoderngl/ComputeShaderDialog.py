@@ -3,7 +3,6 @@ from PyQt5.QtCore import Qt, QRect, QSettings, QStandardPaths, QUuid
 from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QLineEdit, QTextEdit, QCheckBox
 from . import ComputeBufferMapperDialog, RgbaCorrectionHelper
-import traceback
 
 # Dialog box for compute shader
 class ComputeShaderDialog(QDialog):
@@ -30,7 +29,6 @@ class ComputeShaderDialog(QDialog):
         monoFont.setStyleHint(QFont.TypeWriter)
 
         self.rgbaColorCorrector = RgbaCorrectionHelper.RgbaCorrectionHelper()
-        self.rgbaPrepassCorrector = RgbaCorrectionHelper.RgbaCorrectionHelper()
         self.rgbaCorrectCheck = QCheckBox("Fix RGBA color channel order", self)
         self.rgbaCorrectCheck.setChecked(True)
         self.rgbaCorrectCheck.setToolTip("""Attempt to ensure the red and blue color channels are in the correct order when using RGBA color mode.
@@ -147,63 +145,55 @@ If you notice issues with the order of red and blue color channels, try toggling
                     shader.release()
                 self.saveSettings()
                 return
-            # Create input and output images
+            # Create textures for each mapped input and output image
             for item in self.mapWindow.imageMapItems:
                 if item.layerId == "<2>":
-                    # Special case for new node
-                    # Get color format data from the document
                     node = doc
-                    components, colorType = self.getColorComponentsAndType(doc)
-                    texture = ctx.texture((doc.width(), doc.height()), components, dtype=colorType)
+                    data = None
                 else:
                     if item.layerId == "<>":
-                        # Special case for current node
                         node = doc.activeNode()
                     else:
                         node = doc.nodeByUniqueID(QUuid(item.layerId))
-                    # Get color format data from the node
-                    components, colorType = self.getColorComponentsAndType(node)
-                    texture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
-                # Perform RGBA color channel corrections on texture if needed
-                if self.rgbaCorrectCheck.isChecked() and item.read:
-                    # For some reason, swizzling does not work. Instead, use another corrector for prerender pass
-                    self.rgbaPrepassCorrector.FixTextureIfNeeded(node, texture)
+                    data = node.projectionPixelData(0, 0, doc.width(), doc.height())
+                components, colorType = self.getColorComponentsAndType(node)
+                texture = ctx.texture((doc.width(), doc.height()), components, data=data, dtype=colorType)
                 images.append(texture)
-            # Perform prepass color order correction
+                # If color correction is needed on an input, add it to a prepass shader to correct it
+                if self.rgbaCorrectCheck.isChecked() and item.read:
+                    self.rgbaColorCorrector.fixTextureIfNeeded(doc, texture)
+            # Run the prepass color correction shader
             if self.rgbaCorrectCheck.isChecked():
-                self.rgbaPrepassCorrector.RenderCorrectionIfNeeded(ctx, doc)
-            # Now assign all images to image units
+                self.rgbaColorCorrector.renderCorrectionIfNeeded(ctx, doc)
+            # Bind images to the compute shader
             for idx in range(len(self.mapWindow.imageMapItems)):
+                item = self.mapWindow.imageMapItems[idx]
+                if item.layerId == "<2>":
+                    node = doc
+                elif item.layerId == "<>":
+                    node = doc.activeNode()
+                else:
+                    node = doc.nodeByUniqueID(QUuid(item.layerId))
                 try:
-                    item = self.mapWindow.imageMapItems[idx]
-                    # If this texture was part of the prepass, use the corrected texture instead
-                    if item.layerId == "<>":
-                        # Special case for current node
-                        node = doc.activeNode()
-                    elif item.layerId != "<2>":
-                        node = doc.nodeByUniqueID(QUuid(item.layerId))
+                    if self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.nodeNeedsCorrection(node) and item.read:
+                        # If an input image was corrected, bind the corrected image
+                        self.rgbaColorCorrector.getNextCorrectedTexture().bind_to_image(item.index, read=True, write=item.write)
                     else:
-                        node = doc
-                    textureWasFixed = self.rgbaCorrectCheck.isChecked() and item.read and self.rgbaPrepassCorrector.NodeNeedsCorrection(node)
-                    textureToUse = images[idx] if not textureWasFixed else self.rgbaPrepassCorrector.GetNextCorrectedTexture()
-                    # Now also check if this texture will need post shader processing
-                    if self.rgbaCorrectCheck.isChecked() and item.write:
-                        self.rgbaColorCorrector.FixTextureIfNeeded(node, textureToUse)
-                    # Bind texture to image unit
-                    # Because compute shaders require OpenGL >= 4.3, we can use convenient and easy methods to bind textures
-                    textureToUse.bind_to_image(item.index, read=item.read, write=item.write)
+                        images[idx].bind_to_image(item.index, read=item.read, write=item.write)
                 except Exception as e:
-                    self.errBox.setPlainText(traceback.format_exc() + "\n\n" + str(e))
+                    self.errBox.setPlainText(str(e))
                     # Cleanup and early exit
                     for i in images:
                         i.release()
                     shader.release()
-                    self.rgbaPrepassCorrector.CleanUp()
+                    self.rgbaColorCorrector.cleanUp()
                     return
-            # Create textures for sampler inputs. These don't need a prepass fix because swizzling works
+                # Add any outputs to a correction shader that runs after the compute shader
+                if self.rgbaCorrectCheck.isChecked() and item.write:
+                    self.rgbaColorCorrector.fixTextureIfNeeded(node, images[idx])
+            # Create textures for mapped texture units
             for item in self.mapWindow.textureMapItems:
                 if item.layerId == "<>":
-                    # Special case for current node
                     node = doc.activeNode()
                 else:
                     node = doc.nodeByUniqueID(QUuid(item.layerId))
@@ -211,7 +201,7 @@ If you notice issues with the order of red and blue color channels, try toggling
                 texture = ctx.texture((doc.width(), doc.height()), components, data=node.projectionPixelData(0, 0, doc.width(), doc.height()), dtype=colorType)
                 # Perform RGBA color channel corrections on texture if needed
                 if self.rgbaCorrectCheck.isChecked():
-                    self.rgbaColorCorrector.SwizzleTextureIfNeeded(node, texture)
+                    self.rgbaColorCorrector.swizzleTextureIfNeeded(node, texture)
                 textures.append(texture)
                 # Attempt to bind the textures to the shader and texture units and assign samplers
                 try:
@@ -219,14 +209,13 @@ If you notice issues with the order of red and blue color channels, try toggling
                     if item.variableName:
                         shader[item.variableName] = item.index
                 except Exception as e:
-                    self.errBox.setPlainText(traceback.format_exc() + "\n\n" + str(e))
-                    # Cleanup and early exit
+                    self.errBox.setPlainText(str(e))
                     for i in images:
                         i.release()
                     for t in textures:
                         t.release()
                     shader.release()
-                    self.rgbaPrepassCorrector.CleanUp()
+                    self.rgbaColorCorrector.cleanUp()
                     return
             # Try to get the workgroup dimensions
             try:
@@ -240,44 +229,50 @@ If you notice issues with the order of red and blue color channels, try toggling
                 for t in textures:
                     t.release()
                 shader.release()
-                self.rgbaPrepassCorrector.CleanUp()
-                self.rgbaColorCorrector.CleanUp()
+                self.rgbaColorCorrector.cleanUp()
                 return
-            
-            ctx.clear()
-            # Display any errors in warningWidget
+            # Run the shader
             try:
                 shader.run(workgroupX, workgroupY, workgroupZ)
                 ctx.finish()
-                # Run the RGBA channel correction pass if needed
+                # Run the correction shader on any outputs that need it
                 if self.rgbaCorrectCheck.isChecked():
-                    self.rgbaColorCorrector.RenderCorrectionIfNeeded(ctx, doc)
-                # Copy the output pixel data
-                for index in range(len(self.mapWindow.imageMapItems)):
-                    output = self.mapWindow.imageMapItems[index]
-                    if not output.write:
-                        continue
-                    if output.layerId == "<>":
-                        node = doc.activeNode()
-                    elif output.layerId == "<2>":
-                        node = doc.createNode(f"Render Result {index}", "paintlayer")
-                        newNodes.append(node)
-                    else:
-                        node = doc.nodeByUniqueID(QUuid(output.layerId))
-                    # If this output needed color channel correction, use the corrected texture
-                    textureToUse = images[index] if not (self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.NodeNeedsCorrection(node)) else self.rgbaColorCorrector.GetNextCorrectedTexture()
-                    node.setPixelData(textureToUse.read(), 0, 0, doc.width(), doc.height())
-                self.errBox.setPlainText("")
+                    self.rgbaColorCorrector.renderCorrectionIfNeeded(ctx, doc)
             except Exception as e:
-                self.errBox.setPlainText(traceback.format_exc() + "\n\n" + str(e))
+                self.errBox.setPlainText(str(e))
+                for i in images:
+                    i.release()
+                for t in textures:
+                    t.release()
+                shader.release()
+                self.rgbaColorCorrector.cleanUp()
+                return
+            # Set the pixel data of the nodes assigned to outputs
+            for idx in range(len(self.mapWindow.imageMapItems)):
+                item = self.mapWindow.imageMapItems[idx]
+                if not item.write:
+                    continue
+                if item.layerId == "<2>":
+                    node = doc.createNode(f"Render Result {idx}", "paintlayer")
+                    newNodes.append(node)
+                elif item.layerId == "<>":
+                    node = doc.activeNode()
+                else:
+                    node = doc.nodeByUniqueID(QUuid(item.layerId))
+                try:
+                    if self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.nodeNeedsCorrection(node):
+                        node.setPixelData(self.rgbaColorCorrector.getNextCorrectedTexture().read(), 0, 0, doc.width(), doc.height())
+                    else:
+                        node.setPixelData(images[idx].read(), 0, 0, doc.width(), doc.height())
+                except Exception as e:
+                    self.errBox.setPlainText(str(e))
             # Cleanup
             for i in images:
                 i.release()
             for t in textures:
                 t.release()
             shader.release()
-            self.rgbaPrepassCorrector.CleanUp()
-            self.rgbaColorCorrector.CleanUp()
+            self.rgbaColorCorrector.cleanUp()
         # Exit the context scope before adding new nodes
         for newNode in newNodes:
             doc.activeNode().parentNode().addChildNode(newNode, doc.activeNode())

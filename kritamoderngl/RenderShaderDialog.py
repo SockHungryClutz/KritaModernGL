@@ -178,7 +178,7 @@ If you notice issues with the order of red and blue color channels, try toggling
                 inputTexture.repeat_y = input.repeat
                 # This is to fix RGBA color mode actually being BGRA with integer color depth
                 if self.rgbaCorrectCheck.isChecked():
-                    self.rgbaColorCorrector.SwizzleTextureIfNeeded(node, inputTexture)
+                    self.rgbaColorCorrector.swizzleTextureIfNeeded(node, inputTexture)
                 inputTextures.append(inputTexture)
                 # Attempt to bind the textures to the program and texture units and assign samplers
                 try:
@@ -209,7 +209,7 @@ If you notice issues with the order of red and blue color channels, try toggling
                 outputTexture.repeat_x = output.repeat
                 outputTexture.repeat_y = output.repeat
                 if self.rgbaCorrectCheck.isChecked():
-                    self.rgbaColorCorrector.FixTextureIfNeeded(node, outputTexture)
+                    self.rgbaColorCorrector.fixTextureIfNeeded(node, outputTexture)
                 outputTextures.append(outputTexture)
             # Attempt to create and bind the framebuffer
             try:
@@ -263,7 +263,7 @@ If you notice issues with the order of red and blue color channels, try toggling
                 ctx.finish()
                 # Run the RGBA channel correction pass if needed
                 if self.rgbaCorrectCheck.isChecked():
-                    self.rgbaColorCorrector.RenderCorrectionIfNeeded(ctx, doc)
+                    self.rgbaColorCorrector.renderCorrectionIfNeeded(ctx, doc)
                 # Copy data from output buffers to nodes
                 for index in range(len(self.mapWindow.outputTextureMapItems)):
                     output = self.mapWindow.outputTextureMapItems[index]
@@ -275,7 +275,7 @@ If you notice issues with the order of red and blue color channels, try toggling
                     else:
                         node = doc.nodeByUniqueID(QUuid(output.layerId))
                     # If this output needed color channel correction, use the corrected texture
-                    textureToUse = outputTextures[index] if not (self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.NodeNeedsCorrection(node)) else self.rgbaColorCorrector.GetNextCorrectedTexture()
+                    textureToUse = outputTextures[index] if not (self.rgbaCorrectCheck.isChecked() and self.rgbaColorCorrector.nodeNeedsCorrection(node)) else self.rgbaColorCorrector.getNextCorrectedTexture()
                     node.setPixelData(textureToUse.read(), 0, 0, doc.width(), doc.height())
                 self.errBox.setPlainText("")
             except Exception as e:
@@ -288,7 +288,7 @@ If you notice issues with the order of red and blue color channels, try toggling
             outFrameBuffer.release()
             vao.release()
             program.release()
-            self.rgbaColorCorrector.CleanUp()
+            self.rgbaColorCorrector.cleanUp()
         # Exit the context scope before adding new nodes
         for newNode in newNodes:
             doc.activeNode().parentNode().addChildNode(newNode, doc.activeNode())

@@ -35,7 +35,6 @@ class RgbaCorrectionHelper:
     frameBuffer = None
     program = None
     vao = None
-    returnIndex = 0
 
     def __init__(self):
         self.texturesToReplace = []
@@ -43,29 +42,28 @@ class RgbaCorrectionHelper:
         self.frameBuffer = None
         self.program = None
         self.vao = None
-        self.returnIndex = 0
 
     # Check if this Krita node needs blue and red channels swapped
-    def NodeNeedsCorrection(self, node):
+    def nodeNeedsCorrection(self, node):
         return (node and node.colorDepth()[0] == "U" and node.colorModel() == "RGBA")
 
     # If node needs correction, apply swizzle to texture, only works on inputs
-    def SwizzleTextureIfNeeded(self, node, texture):
-        if self.NodeNeedsCorrection(node):
+    def swizzleTextureIfNeeded(self, node, texture):
+        if self.nodeNeedsCorrection(node):
             texture.swizzle = "BGRA"
 
     # If node needs correction, save a reference to the texture to use later
-    def FixTextureIfNeeded(self, node, texture):
+    def fixTextureIfNeeded(self, node, texture):
         # This will simply track the texture until it is time to build the correction shader
-        if self.NodeNeedsCorrection(node):
+        if self.nodeNeedsCorrection(node):
             self.texturesToReplace.append(texture)
 
     # If any textures are saved, then the correction pass needs to happen
-    def CorrectionPassNeeded(self):
+    def correctionPassNeeded(self):
         return len(self.texturesToReplace) > 0
 
     # Create a shader using the number of saved textures, which will be bound later
-    def GenerateFragmentShader(self):
+    def generateFragmentShader(self):
         fragShader = "#version 330 core\n\n"
         for i in range(len(self.texturesToReplace)):
             fragShader += f"uniform usampler2D in_texture{i};\nlayout(location = {i}) out uvec4 out_color{i};\n"
@@ -76,61 +74,65 @@ class RgbaCorrectionHelper:
         return fragShader
 
     # Create a shader program for correction
-    def GenerateProgram(self, ctx):
-        return ctx.program(vertex_shader = vertexShader, fragment_shader = self.GenerateFragmentShader())
+    def generateProgram(self, ctx):
+        return ctx.program(vertex_shader = vertexShader, fragment_shader = self.generateFragmentShader())
 
     # Binds the saved textures to be used as input for correction shader
-    def BindTextures(self, program):
+    def bindTextures(self, program):
         for i in range(len(self.texturesToReplace)):
             self.texturesToReplace[i].use(location = i)
             self.texturesToReplace[i].swizzle = "BGRA"
             program[f"in_texture{i}"] = i
 
     # Create textures for the framebuffer output to store the correction
-    def CreateFrameBuffer(self, ctx, doc):
-        self.correctedTextures = []
+    def createFrameBuffer(self, ctx, doc):
+        if self.correctedTextures:
+            # There is likely textures and a framebuffer from a previous pass that needs to be cleaned up
+            for t in self.correctedTextures:
+                t.release()
+            self.frameBuffer.release()
+            self.correctedTextures = []
         colorDepth = doc.colorDepth()[0].lower() + str(int(doc.colorDepth()[1:]) // 8)
         for i in range(len(self.texturesToReplace)):
             self.correctedTextures.append(ctx.texture((doc.width(), doc.height()), 4, dtype=colorDepth))
         return ctx.framebuffer(self.correctedTextures)
 
     # Create the vertex array to use for rendering... the actual vertices are in the vertex shader
-    def CreateVertexArray(self, ctx, program):
+    def createVertexArray(self, ctx, program):
         vao = ctx.vertex_array(program, [])
         vao.vertices = 6
         vao.mode = ctx.TRIANGLES
         return vao
 
     # Perform the rendering operation to correct color channels
-    def RenderCorrectionIfNeeded(self, ctx, doc):
-        if not self.CorrectionPassNeeded():
+    def renderCorrectionIfNeeded(self, ctx, doc):
+        if not self.correctionPassNeeded():
             return
-        self.program = self.GenerateProgram(ctx)
-        self.BindTextures(self.program)
-        self.frameBuffer = self.CreateFrameBuffer(ctx, doc)
+        self.program = self.generateProgram(ctx)
+        self.bindTextures(self.program)
+        self.frameBuffer = self.createFrameBuffer(ctx, doc)
         self.frameBuffer.use()
-        self.vao = self.CreateVertexArray(ctx, self.program)
+        self.vao = self.createVertexArray(ctx, self.program)
         ctx.clear()
         self.vao.render()
         ctx.finish()
+        self.texturesToReplace = []
 
     # This will iterate over the corrected textures to return them one by one
-    def GetNextCorrectedTexture(self):
-        if self.returnIndex < len(self.correctedTextures):
-            self.returnIndex += 1
-        return self.correctedTextures[self.returnIndex - 1]
+    def getNextCorrectedTexture(self):
+        # Rotating the list means we don't need to keep track of how many we've actually returned
+        self.correctedTextures = self.correctedTextures[1:] + self.correctedTextures[:1]
+        return self.correctedTextures[-1]
 
     # Clean up all OGL objects created in rendering process, call after using all the outputs
-    def CleanUp(self):
+    def cleanUp(self):
         # texturesToCorrect is not included in cleanup because they belong to the parent
         for tex in self.correctedTextures:
             tex.release()
+        self.correctedTextures = []
         if self.frameBuffer:
             self.frameBuffer.release()
         if self.program:
             self.program.release()
         if self.vao:
             self.vao.release()
-        self.correctedTextures = []
-        self.texturesToReplace = []
-        self.returnIndex = 0
